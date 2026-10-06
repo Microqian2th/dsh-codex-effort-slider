@@ -117,6 +117,9 @@ const constantNames = [
   "TRACK_HEIGHT",
   "KNOB_SIZE",
   "KNOB_RADIUS",
+  // CSS 数组里用到的圆角简写（左端 = 旋钮半径的真半圆 + 右端直角）。
+  // 必须排在 KNOB_RADIUS 之后：常量按本列表顺序在同一作用域里求值。
+  "FILL_RADIUS",
   "BASE_SPEEDUP",
   "STARFIELD_DURATION_MEAN",
   "STARFIELD_DURATION_SPREAD",

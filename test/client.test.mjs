@@ -175,6 +175,78 @@ section("2b. 顶头适配：旋钮与滑条同高，且两端都不越界");
   eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[2b] 最右端映射到最高档");
 }
 
+section("2c. 贴最左时左端不露出直边（圆角不随宽度退化）");
+{
+  const { internals, react, host } = await setup();
+  const R = internals.KNOB_RADIUS;
+  const H = internals.TRACK_HEIGHT;
+
+  /** 取某条规则的声明文本（`选择器{...}` 里的大括号内容）。 */
+  function declsOf(selector) {
+    const at = internals.CSS.indexOf(selector + "{");
+    if (at < 0) return null;
+    return internals.CSS.slice(at + selector.length + 1, internals.CSS.indexOf("}", at));
+  }
+
+  /** 解析 border-radius 简写 → {tl,tr,br,bl}（px 或 0）。 */
+  function radiiOf(decls) {
+    const m = /border-radius:([^;}]+)/.exec(decls);
+    if (m === null) throw new Error("规则里没有 border-radius：" + decls);
+    const raw = m[1].trim().split(/\s+/);
+    // CSS 简写里 0 允许不带单位
+    if (!raw.every((s) => s === "0" || /^[\d.]+px$/.test(s))) throw new Error("只支持 px 圆角，实际：" + m[1]);
+    const v = raw.map((s) => (s === "0" ? 0 : parseFloat(s)));
+    return { tl: v[0], tr: v[1] ?? v[0], br: v[2] ?? v[0], bl: v[3] ?? v[1] ?? v[0] };
+  }
+
+  /**
+   * CSS 角半径收缩规则：**一条边上两个角的半径之和不能超过这条边**，
+   * 超了就四个角按同一因子等比缩小。这正是「贴最左时圆角 14 → 7、露出直边」的成因：
+   * 填充盒贴左只有 14px 宽，14 ÷ (999+999) 把半径压成了 7。
+   */
+  function resolveRadii(r, w, h) {
+    let f = 1;
+    for (const [len, sum] of [[w, r.tl + r.tr], [h, r.tr + r.br], [w, r.bl + r.br], [h, r.tl + r.bl]]) {
+      if (sum > 0) f = Math.min(f, len / sum);
+    }
+    return { f, tl: r.tl * f, tr: r.tr * f, br: r.br * f, bl: r.bl * f };
+  }
+
+  /** 某位置下填充层盒子的宽度（px）：与 knobOffsetOf 同源 = 半径 + pct × 行程。 */
+  const TRACK_W = 300;
+  const boxW = (pct) => R + pct * (TRACK_W - 2 * R);
+
+  for (const selector of [".ces-fill", ".ces-energy", ".ces-stars"]) {
+    const decls = declsOf(selector);
+    ok(decls !== null, `[2c] ${selector} 规则存在`);
+    const r = radiiOf(decls);
+    // 关键不变量：**任何宽度**下左端都必须是半径 = 旋钮半径 的真半圆
+    for (const pct of [0, 0.02, 0.071, 1 / 3, 1]) {
+      const out = resolveRadii(r, boxW(pct), H);
+      near(out.tl, R, `[2c] ${selector} pct=${pct}：左端半径 = 旋钮半径 ${R}px（不被宽度压扁）`, 0.01);
+    }
+    // 右端直角：右边界永远落在旋钮圆心、再向右被旋钮盖住一个半径，所以不需要圆角；
+    // 而「不做右圆角」正是让收缩规则不再被触发的原因。
+    const out0 = resolveRadii(r, boxW(0), H);
+    eq(out0.tr, 0, `[2c] ${selector}：右上角是直角（藏在旋钮底下）`);
+    eq(out0.br, 0, `[2c] ${selector}：右下角是直角`);
+    ok(decls.indexOf("border-radius:999px") < 0, `[2c] ${selector} 不再用 999px（窄盒子上会退化成 ${R / 2}px）`);
+  }
+
+  // 右端直角为什么安全：填充右边界恒等于旋钮圆心，旋钮再向右多盖一个半径
+  const node = track(react, 0, TRACK_W);
+  node.fire("onPointerDown", { clientX: 0, pointerId: 1 });
+  node.fire("onPointerUp", {});
+  await settle();
+  eq(host.selects[host.selects.length - 1].reasoningEffort, "off", "[2c] 贴最左命中第一档");
+  eq(internals.knobOffsetOf(0), `calc(${R}px + 0 * (100% - ${2 * R}px))`,
+    "[2c] 贴左时填充盒宽只剩一个半径 —— 最窄、最容易退化的那个宽度");
+  eq(react.find("fill").style.width, internals.knobOffsetOf(0),
+    "[2c] 贴左：填充宽度 = 旋钮圆心（右端直角恰好被旋钮盖住）");
+  eq(react.find("knob").style.left, internals.knobOffsetOf(0),
+    "[2c] 贴左：旋钮圆心与填充右边界重合");
+}
+
 section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-open）");
 {
   // 3a 菜单没有 aria-controls

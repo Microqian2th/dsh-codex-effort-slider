@@ -117,6 +117,10 @@ const constantNames = [
   "TRACK_HEIGHT",
   "KNOB_SIZE",
   "KNOB_RADIUS",
+  // 归位动画的时长/缓动/过渡声明：CSS 数组要插值它们，必须按顺序排在前面求值。
+  "SNAP_DURATION_MS",
+  "SNAP_EASING",
+  "SNAP_TRANSITION",
   "BASE_SPEEDUP",
   "STARFIELD_DURATION_MEAN",
   "STARFIELD_DURATION_SPREAD",
@@ -404,10 +408,23 @@ function onMove(clientX) {
 track.addEventListener("pointerdown", function (event) {
   dragging = true;
   track.setPointerCapture(event.pointerId);
+  // 按下 → 过渡生效：旋钮从当前位置**动画滑到手指位置**（与产物一致）
+  host.dataset.following = "0";
   onMove(event.clientX);
 });
-track.addEventListener("pointermove", function (event) { if (dragging) onMove(event.clientX); });
-function end() { if (!dragging) return; dragging = false; render(); }
+track.addEventListener("pointermove", function (event) {
+  if (!dragging) return;
+  // 拖动中 → 关掉位置过渡：**实时等于指针**，不拖影、不追不上手指
+  host.dataset.following = "1";
+  onMove(event.clientX);
+});
+function end() {
+  if (!dragging) return;
+  dragging = false;
+  // 松手 → 恢复过渡，动画归位到**固定档位点**（render() 不带 pct 就是档位刻度）
+  host.dataset.following = "0";
+  render();
+}
 track.addEventListener("pointerup", end);
 track.addEventListener("pointercancel", end);
 track.addEventListener("keydown", function (event) {

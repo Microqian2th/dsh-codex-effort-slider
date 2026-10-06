@@ -175,6 +175,89 @@ section("2b. 顶头适配：旋钮与滑条同高，且两端都不越界");
   eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[2b] 最右端映射到最高档");
 }
 
+section("2d. 归位动画：按下/松手有过渡，拖动中必须没有");
+{
+  const { internals, react, host } = await setup();
+  const root = react.find("root");
+
+  /** 取某条规则的声明文本。 */
+  function declsOf(selector) {
+    const at = internals.CSS.indexOf(selector + "{");
+    if (at < 0) return null;
+    return internals.CSS.slice(at + selector.length + 1, internals.CSS.indexOf("}", at));
+  }
+
+  // ── 常量：时长/缓动可断言、且是用户点名的「缓出缓入」──
+  ok(typeof internals.SNAP_DURATION_MS === "number" && internals.SNAP_DURATION_MS > 0,
+    `[2d] 归位时长是正数（${internals.SNAP_DURATION_MS}ms）`);
+  eq(internals.SNAP_EASING, "ease-in-out", "[2d] 缓动 = ease-in-out（缓出缓入）");
+
+  // ── 三层位置都带过渡 ──
+  for (const sel of [".ces-knob", ".ces-fill"]) {
+    const d = declsOf(sel);
+    ok(d !== null && /transition:[^;}]*left\s+\d+ms/.test(d),
+      `[2d] ${sel} 的 left 有过渡（归位动画的载体）`);
+    ok(d !== null && /transition:[^;}]*width\s+\d+ms/.test(d),
+      `[2d] ${sel} 的 width 有过渡（与旋钮同步，不然会脱节）`);
+    ok(d !== null && d.indexOf("ease-in-out") > 0, `[2d] ${sel} 用的是 ease-in-out`);
+  }
+  {
+    // 能量层已有 opacity 过渡，width 必须一起动，否则它和填充脱节
+    const d = declsOf(".ces-energy");
+    ok(/transition:[^;}]*opacity[^;}]*width\s+\d+ms/.test(d), "[2d] 能量层：opacity 与 width 都有过渡");
+  }
+
+  // ── 跟手开关：拖动期间必须关掉位置过渡，否则旋钮追不上手指 ──
+  const followCss = declsOf(".ces-inline[data-following='1'] .ces-knob,.ces-inline[data-following='1'] .ces-fill,.ces-inline[data-following='1'] .ces-energy,.ces-inline[data-following='1'] .ces-stars");
+  ok(followCss !== null, "[2d] 有跟手模式的选择器（拖动时关掉位置过渡）");
+  ok(followCss !== null && followCss.indexOf("transition:") >= 0, "[2d] 跟手模式重写了 transition");
+  ok(followCss !== null && followCss.indexOf("left") < 0 && followCss.indexOf("width") < 0,
+    "[2d] 跟手模式里没有 left/width（位置过渡确实被关掉了）");
+
+  // ── reduced-motion：位置动画整个关掉（位移最容易引起不适）──
+  const rm = /@media \(prefers-reduced-motion: reduce\)\{([^}]*)\}/.exec(internals.CSS);
+  ok(rm !== null, "[2d] 有 reduced-motion 媒体查询");
+  ok(rm !== null && rm[1].indexOf(".ces-knob") >= 0, "[2d] reduced-motion 下旋钮的过渡被关掉（transition:none）");
+
+  // ── 行为：初始/拖动中 = 跟手，松手后 = 恢复过渡 ──
+  eq(root.getAttribute("data-following"), "0", "[2d] 初始不是跟手（静止时可以动画）");
+
+  const node = track(react, 0, 300);
+  // 按下：应当**保留**过渡（动画滑到手指位置）
+  node.fire("onPointerDown", { clientX: 100, pointerId: 1 });
+  await settle();
+  eq(react.find("root").getAttribute("data-following"), "0", "[2d] 按下：过渡生效（动画滑到手指位置）");
+
+  // 拖动：必须切到跟手（关掉过渡，位置实时等于指针）
+  node.fire("onPointerMove", { clientX: 150, pointerId: 1 });
+  await settle();
+  eq(react.find("root").getAttribute("data-following"), "1", "[2d] 拖动中：切到跟手模式（位置实时等于指针）");
+
+  // 松手：恢复过渡 → 从手指处动画归位到固定档位点
+  node.fire("onPointerUp", {});
+  await settle();
+  eq(react.find("root").getAttribute("data-following"), "0", "[2d] 松手：恢复过渡（动画归位到固定档位点）");
+
+  // 松手后位置必须回落到**档位刻度**（而不是停在手指位置）——这正是动画的终点
+  const levels = 4;
+  const expectedPct = Number(react.find("knob").style.left.match(/\* \(100% - 28px\)/)) === null ? null : null;
+  const left = react.find("knob").style.left;
+  const pctMatch = /\+\s*([\d.]+)\s*\*/.exec(left);
+  ok(pctMatch !== null, "[2d] 松手后旋钮位置是 calc(… + pct × …) 形式");
+  if (pctMatch !== null) {
+    const pct = Number(pctMatch[1]);
+    const idx = Math.round(pct * (levels - 1));
+    const snapped = idx / (levels - 1);
+    // knobOffsetOf 会把 pct 规整到 4 位小数，所以容差取 1e-4（不是精确相等）
+    near(pct, snapped, `[2d] 松手后百分比吸附到档位刻度（pct=${pct} → ${snapped}）`, 1e-4);
+  }
+
+  // ── 键盘操作也应带动画（同样走"位置变化 + 过渡生效"这条路）──
+  track(react, 0, 300).fire("onKeyDown", { key: "ArrowRight", preventDefault() {} });
+  await settle();
+  eq(react.find("root").getAttribute("data-following"), "0", "[2d] 键盘改档：过渡生效（也做动画）");
+}
+
 section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-open）");
 {
   // 3a 菜单没有 aria-controls

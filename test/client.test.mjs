@@ -877,16 +877,16 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
 
 /* ══════════════════════════════════════════════════════════════════════ */
 
-section("17. 连续运动引擎：纯函数层（注入固定 dt，不依赖时钟）");
+section("17. 连续运动引擎：纯函数层（刹车预测 + 速度跟踪）");
 {
   const ctx = await setup();
   const I = ctx.internals;
   const P = I.MOTION;
   const DT = 1 / 60;
 
-  /** 跑一串帧，返回轨迹。 */
+  /** 跑一串帧，返回轨迹与统计。 */
   function trace(init, frames, mutate) {
-    const m = Object.assign({ x: 0, v: 0, a: 0, target: 0, vPtr: 0 }, init);
+    const m = Object.assign({ x: 0, v: 0, a: 0, target: 0 }, init);
     const rows = [];
     let maxDv = 0, prevV = m.v, maxDa = 0, prevA = m.a;
     for (let f = 0; f < frames; f += 1) {
@@ -900,106 +900,155 @@ section("17. 连续运动引擎：纯函数层（注入固定 dt，不依赖时�
     return { m, rows, maxDv, maxDa };
   }
 
-  // ① 参数自洽：jmax/amax = 加速度爬坡时间，必须在 15~40ms（太快会瞬间反向，太慢前馈失效）
-  const rampMs = (P.amax / P.jmax) * 1000;
-  ok(rampMs >= 15 && rampMs <= 40, `[17] 加速度爬坡时间 ${rampMs.toFixed(0)}ms 在 15~40ms（连续性 ↔ 响应性的平衡点）`);
-  eq(P.zeta, 1, "[17] 阻尼比 = 1（临界阻尼：数学上无过冲）");
-  ok(P.vmax > 0 && P.amax > 0 && P.jmax > 0 && P.omega > 0, "[17] 四个限幅/增益都是正数");
+  /** 从静止走到 target，跑到精确落点（或超时）；同时统计 v 的符号翻转（抖振）。 */
+  function run(target, maxFrames = 3000) {
+    const m = { x: 0, v: 0, a: 0, target };
+    let peak = 0, frames = 0, flips = 0, prevSign = 0;
+    for (; frames < maxFrames; frames += 1) {
+      I.motionStep(m, DT, P);
+      peak = Math.max(peak, m.x);
+      const s = Math.sign(m.v);
+      if (s !== 0 && prevSign !== 0 && s !== prevSign) flips += 1;
+      if (s !== 0) prevSign = s;
+      if (m.x === target && m.v === 0) break;
+    }
+    return { m, frames, overshoot: peak - target, flips, landed: m.x === target && m.v === 0 };
+  }
 
-  // ② 零过冲：全程 0→1 不得越过目标
+  // ① 参数：四个旋钮都是正数
+  ok(P.K > 0, `[17] 位置→速度增益 K = ${P.K} > 0`);
+  ok(P.A > 0, `[17] 刹车斜率 A = ${P.A} > 0`);
+  ok(P.k > 0, `[17] 速度跟踪增益 k = ${P.k} > 0`);
+  ok(P.vmax > 0, `[17] 速度上限 vmax = ${P.vmax} > 0`);
+
+  // ② ⚠️ **最关键的结构性断言**：两项必须同时存在。
+  //    只留刹车曲线 √(2A|e|) 会抖振（它是 bang-bang 的切换曲线，
+  //    与恒力 ±A 配套；换成连续力律后必须补线性映射 K·|e|）。
   {
-    const r = trace({ target: 1 }, 200);
-    const overshoot = Math.max(0, ...r.rows.map((row) => row.x - 1));
-    ok(overshoot < 1e-6, `[17] 全程 0→1 零过冲（实测 ${overshoot.toExponential(2)}）`);
+    // 复现"只留刹车曲线"的缺陷版本，确认它确实抖振 —— 防止将来有人把 K 项删掉
+    function stepBrakeOnly(m) {
+      const e = m.target - m.x;
+      let vW = Math.sqrt(2 * P.A * Math.abs(e));
+      if (vW > P.vmax) vW = P.vmax;
+      const vDes = e > 0 ? vW : (e < 0 ? -vW : 0);
+      m.a = Math.max(-P.amax, Math.min(P.amax, P.k * (vDes - m.v)));
+      m.v = Math.max(-P.vmax, Math.min(P.vmax, m.v + m.a * DT));
+      m.x += m.v * DT;
+    }
+    const bad = { x: 0, v: 0, a: 0, target: 0.5 };
+    let flipsBad = 0, prevSign = 0;
+    for (let f = 0; f < 600; f += 1) {
+      stepBrakeOnly(bad);
+      const s = Math.sign(bad.v);
+      if (s !== 0 && prevSign !== 0 && s !== prevSign) flipsBad += 1;
+      if (s !== 0) prevSign = s;
+    }
+    ok(flipsBad > 100,
+      `[17] 反例确认：只有刹车曲线时 v 翻转 ${flipsBad} 次（抖振不收敛）→ 所以 K·|e| 那一项不能删`);
+    // 而正式实现零翻转
+    const good = run(0.5);
+    ok(good.flips === 0, `[17] 正式实现（含 K·|e|）零抖振（v 翻转 ${good.flips} 次）`);
   }
 
-  // ③ 必收敛：三个不同距离都要停住（常数增益那版会极限环振荡不休）
-  for (const target of [1, 0.5, 0.02]) {
-    const r = trace({ target }, 400);
-    const settled = I.motionSettled(r.m, P);
-    ok(settled, `[17] 目标 ${target} 必收敛（无极限环）：最终 x=${r.m.x.toFixed(5)} v=${r.m.v.toFixed(5)}`);
+  // ③ **精确落点 + 零抖振**：所有距离都必须严丝合缝停住
+  for (const target of [0.02, 0.05, 0.1, 0.25, 1 / 3, 0.5, 2 / 3, 0.75, 1]) {
+    const r = run(target);
+    ok(r.landed && r.flips === 0,
+      `[17] 目标 ${target.toFixed(4)} 精确落点且零抖振（${r.frames} 帧，翻转 ${r.flips}）`);
   }
 
-  // ④ 连续性：帧间 Δv 不超过 amax·dt（除非该帧撞边界）
+  // ④ 过冲在亚像素级（≤0.5px / 272px）
+  {
+    const subPixel = 0.5 / 272;
+    let worst = 0;
+    for (const target of [0.02, 0.1, 0.25, 0.5, 0.75]) worst = Math.max(worst, run(target).overshoot);
+    ok(worst < subPixel, `[17] 各距离过冲 ${(worst * 272).toFixed(3)}px < 0.5px（亚像素）`);
+  }
+
+  // ⑤ 加速度被 amax 限住，且**不抖振**（这是本模型相对 bang-bang 的核心优势）
+  //    ⚠️ 口径说明：以前写过"帧间 Δa ≤ amax·dt"，但那条**对速度跟踪力律不成立** ——
+  //       `a = k·(v期望 − v)`，速度差大时 a 就大，一帧内可以变很多（实测 160）。
+  //       这不叫不连续：a 是 (x, v) 的**连续函数**，只是 v 自身一帧内变化大。
+  //       真正该断言的是：a 始终被 amax 限住 + 在目标附近**不来回翻转**（不抖振）。
+  {
+    const r = trace({ x: 0, target: 1 }, 200);
+    let maxAbsA = 0;
+    for (const row of r.rows) maxAbsA = Math.max(maxAbsA, Math.abs(row.a));
+    ok(maxAbsA <= P.amax + 1e-9, `[17] 加速度始终被 amax 限住（实测峰值 ${maxAbsA.toFixed(0)} ≤ ${P.amax}）`);
+
+    // 不抖振：目标固定时，a 的符号翻转次数应为 0（bang-bang 会反复翻转）
+    const m = { x: 0, v: 0, a: 0, target: 1 };
+    let aFlips = 0, prevSign = 0;
+    for (let f = 0; f < 300; f += 1) {
+      I.motionStep(m, DT, P);
+      const s = Math.sign(m.a);
+      if (s !== 0 && prevSign !== 0 && s !== prevSign) aFlips += 1;
+      if (s !== 0) prevSign = s;
+      if (m.x === 1 && m.v === 0) break;
+    }
+    ok(aFlips <= 1, `[17] 到位过程加速度只换向 ${aFlips} 次（加速→减速；不抖振）`);
+  }
+
+  // ⑥ 速度连续（帧间 Δv ≤ amax·dt，撞墙帧除外）
   {
     const r = trace({ target: 1 }, 200);
     const limit = P.amax * DT + 1e-9;
     ok(r.maxDv <= limit, `[17] 帧间 Δv ${r.maxDv.toFixed(3)} ≤ amax·dt ${limit.toFixed(3)}（速度连续）`);
   }
 
-  // ⑤ 加加速度受限：帧间 Δa 不超过 jmax·dt
+  // ⑦ 反向：**先滑行再掉头**（v 连续穿过 0），滑行距离 ≈ v²/(2A)
   {
-    // 频繁反向，最考验连续性
-    const r = trace({ target: 1 }, 240, (m, f) => { m.target = (Math.floor(f / 30) % 2 === 0) ? 1 : 0; });
-    const limit = P.jmax * DT + 1e-9;
-    ok(r.maxDa <= limit, `[17] 帧间 Δa ${r.maxDa.toFixed(3)} ≤ jmax·dt ${limit.toFixed(3)}（加速度连续 = 不咯噔）`);
-  }
-
-  // ⑥ 满速反向：必须"先滑行再掉头"，不是瞬间反向
-  {
-    const m = { x: 0, v: 0, a: 0, target: 1, vPtr: P.vmax };
-    for (let f = 0; f < 60 && m.v < P.vmax * 0.95; f += 1) I.motionStep(m, DT, P);
-    const speedBefore = m.v;
-    let sameDirFrames = 0;
-    let firstNeg = -1;
-    for (let f = 0; f < 60; f += 1) {
-      m.target = 0; m.vPtr = -P.vmax;
+    const m = { x: 0, v: 0, a: 0, target: 1 };
+    for (let f = 0; f < 200 && m.v < P.vmax * 0.95; f += 1) I.motionStep(m, DT, P);
+    const vBefore = m.v, x0 = m.x;
+    let sameDirFrames = 0, maxDv = 0, prevV = m.v, slidePx = 0;
+    for (let f = 0; f < 200; f += 1) {
+      m.target = 0;
       I.motionStep(m, DT, P);
-      if (m.v > 0) sameDirFrames += 1;
-      if (firstNeg < 0 && m.v < 0) { firstNeg = f; break; }
+      maxDv = Math.max(maxDv, Math.abs(m.v - prevV)); prevV = m.v;
+      if (m.v > 0) { sameDirFrames += 1; slidePx = Math.abs(m.x - x0); }
+      else break;
     }
-    ok(speedBefore > P.vmax * 0.5, `[17] 前置：反向时确实在满速附近（v=${speedBefore.toFixed(2)}）`);
-    ok(sameDirFrames >= 2, `[17] 满速反向后有 ${sameDirFrames} 帧仍朝原方向滑行（可见的"先滑后掉头"，不是瞬间反向）`);
+    ok(vBefore > P.vmax * 0.5, `[17] 前置：反向时确实在满速附近（v=${vBefore.toFixed(2)}）`);
+    ok(sameDirFrames >= 1, `[17] 满速反向后有 ${sameDirFrames} 帧仍朝原方向滑行（v 连续穿过 0）`);
+    ok(maxDv <= P.amax * DT + 1e-9, `[17] 反向过程 v 依然连续（最大 Δv ${maxDv.toFixed(3)}）`);
+    // 滑行距离由 A 决定（这是 A 这个旋钮的物理含义）
+    const theory = (vBefore * vBefore) / (2 * P.A);
+    ok(slidePx <= theory * 272 * 1.6 + 1,
+      `[17] 反向滑行 ${(slidePx * 272).toFixed(1)}px ≈ v²/2A ${(theory * 272).toFixed(1)}px（A 越大越"立即听话"）`);
   }
 
-  // ⑦ 边界：拖到轨道外，位置夹在 [0,1]，速度不跳变
+  // ⑧ 边界：位置夹在 [0,1]；非撞墙帧 Δv ≤ amax·dt
   {
     for (const target of [-0.5, 1.5]) {
-      const r = trace({ x: 0.5, target }, 120);
-      ok(r.m.x >= 0 && r.m.x <= 1, `[17] 目标 ${target}：位置被夹在 [0,1]（实测 ${r.m.x.toFixed(4)}）`);
-      ok(r.maxDv <= P.amax * DT + 1e-9, `[17] 目标 ${target}：撞墙帧 Δv ${r.maxDv.toFixed(3)} 也未超限（不瞬间清零）`);
-    }
-  }
-
-  // ⑧ 前馈：带指针速度时稳态滞后显著小于不带（这是"追上后 1:1"的前提）
-  {
-    function sweepLag(useFF) {
-      const m = { x: 0, v: 0, a: 0, target: 0, vPtr: 0 };
-      const speed = 1 / 0.6;
-      const N = Math.ceil(0.6 / DT);
-      let lag = 0;
-      for (let f = 0; f < N; f += 1) {
-        m.target = (f + 1) / N;
-        m.vPtr = useFF ? speed : 0;
+      const m = { x: 0.5, v: 0, a: 0, target };
+      let maxDvNonWall = 0, prevV = m.v;
+      for (let f = 0; f < 200; f += 1) {
+        const before = m.x;
         I.motionStep(m, DT, P);
-        lag = Math.max(lag, Math.abs(m.target - m.x));
+        const dv = Math.abs(m.v - prevV);
+        const hitWall = (m.x === 0 && before > 0 && m.v === 0) || (m.x === 1 && before < 1 && m.v === 0);
+        if (!hitWall) maxDvNonWall = Math.max(maxDvNonWall, dv);
+        prevV = m.v;
       }
-      return lag;
+      ok(m.x >= 0 && m.x <= 1, `[17] 目标 ${target}：位置被夹在 [0,1]（实测 ${m.x.toFixed(4)}）`);
+      ok(maxDvNonWall <= P.amax * DT + 1e-9,
+        `[17] 目标 ${target}：非撞墙帧 Δv ${maxDvNonWall.toFixed(3)} ≤ amax·dt`);
     }
-    const withFF = sweepLag(true);
-    const withoutFF = sweepLag(false);
-    ok(withFF < withoutFF * 0.6, `[17] 前馈把拖动滞后从 ${(withoutFF * 100).toFixed(1)}% 压到 ${(withFF * 100).toFixed(1)}%（前馈是必需的，不是可选）`);
   }
 
-  // ⑨ 指针停下后精确贴合（= 真的 1:1）
+  // ⑨ 极小距离也精确落点
   {
-    const m = { x: 0, v: 0, a: 0, target: 0, vPtr: 1 / 0.6 };
-    const N = Math.ceil(0.6 / DT);
-    for (let f = 0; f < N; f += 1) { m.target = (f + 1) / N; I.motionStep(m, DT, P); }
-    m.target = 1; m.vPtr = 0;
-    let frames = 0;
-    for (let f = 0; f < 120; f += 1) { I.motionStep(m, DT, P); frames += 1; if (I.motionSettled(m, P)) break; }
-    ok(Math.abs(1 - m.x) < 0.005, `[17] 指针停下后 ${frames} 帧内精确贴合（误差 ${(Math.abs(1 - m.x) * 100).toFixed(3)}%）`);
+    for (const target of [0.001, 0.005, 0.01]) {
+      const r = run(target);
+      ok(r.landed, `[17] 极小距离 ${target} 精确落点（${r.frames} 帧）`);
+    }
   }
 
-  // ⑩ 松手外推：是速度的连续函数，无门槛（慢速几乎不推、快速推得多）
+  // ⑩ 松手外推：速度的连续函数，无门槛
   {
     eq(I.releaseIndexFor(0.5, 0, 4), I.indexFromPct(0.5, 4), "[17] 速度为 0 → 外推量为 0（不改落点）");
-    const slow = I.releaseIndexFor(0.5, 0.05, 4);
-    const fast = I.releaseIndexFor(0.5, 6, 4);
-    ok(fast !== slow || Math.abs(6 * I.RELEASE_PROJECT_S) > 0, "[17] 外推随速度单调增大（连续函数，无门槛）");
     eq(I.RELEASE_PROJECT_S, 0.08, "[17] 外推时长 = 0.08s");
-    // 顺着运动方向：正速度不会把落点推到左边
     ok(I.indexFromPct(0.5 + 6 * 0.08, 4) >= I.indexFromPct(0.5, 4), "[17] 外推顺着运动方向（不会反向推）");
   }
 }
@@ -1104,8 +1153,8 @@ section("19. 连续运动引擎：「减少动态效果」下仍不跳变");
 {
   const ctx = await setup({ reducedMotion: true });
   const I = ctx.internals;
-  ok(I.MOTION_REDUCED.omega > I.MOTION.omega, "[19] reduced 档固有频率更高（跟得更紧 = 几乎无滞后）");
-  eq(I.MOTION_REDUCED.zeta, 1, "[19] reduced 档仍是临界阻尼（无过冲）");
+  ok(I.MOTION_REDUCED.K > I.MOTION.K, "[19] reduced 档位置→速度增益更大（跟得更紧 = 几乎无滞后）");
+  ok(I.MOTION_REDUCED.vmax >= I.MOTION.vmax, "[19] reduced 档速度上限不低于常规档");
 
   // 拖动：位置直接跟到指针（几乎无滞后），且**仍然连续**（不是瞬移）
   const before = ctx.react.find("knob").style.left;
@@ -1150,17 +1199,20 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
   ok(I.decayPointerSpeed(-2, 0.2, I.POINTER_STALE_S, I.POINTER_SPEED_TAU) < 0,
     "[20] 反向速度同样衰减（不会变号）");
 
-  // ── 这个 bug 的数学本质：静态平衡点 e = −2ζ·vPtr/ω ──
-  // 若 vPtr 冻结，滑块会永久偏离目标 2·vPtr/omega（实测 vPtr=2 → 13.33%）。
+  // ── 这个 bug 现在从机理上消失了：vPtr 不再参与运动演化 ──
+  // （上一版（弹簧阻尼 + 前馈）里 vPtr 是前馈项 2ζω(vPtr−v) 的输入，冻结会把它
+  //   变成一个恒定的力，让滑块永久偏在鼠标一侧 13.33%。本版运动律只看 x 与 v，
+  //   不含前馈项，所以那一整类问题从机理上不存在。）
+  // 但 vPtr 仍被"松手外推"使用，所以衰减本身必须保留（见上面几条）。
   {
     const P = I.MOTION;
-    const m = { x: 0.5, v: 0, a: 0, target: 0.5, vPtr: 2 };
-    for (let f = 0; f < 3000; f += 1) I.motionStep(m, 1 / 60, P);
-    const offset = m.x - m.target;
-    const theory = 2 * P.zeta * 2 / P.omega;
-    ok(Math.abs(offset - theory) < 0.002,
-      `[20] 复现旧 bug 的机理：vPtr 冻结时滑块永久偏 ${(offset * 100).toFixed(2)}%（理论 ${(theory * 100).toFixed(2)}%）`);
-    ok(!I.motionSettled(m, P), "[20] 且**永远达不到到位阈值**（旧代码的帧循环因此永不退出）");
+    // 运动演化**完全不看 vPtr**：给一个巨大的 vPtr 也不影响结果
+    const a = { x: 0.5, v: 0, a: 0, target: 0.8, vPtr: 0 };
+    const b = { x: 0.5, v: 0, a: 0, target: 0.8, vPtr: 99 };
+    for (let f = 0; f < 200; f += 1) { I.motionStep(a, 1 / 60, P); I.motionStep(b, 1 / 60, P); }
+    ok(a.x === b.x && a.v === b.v,
+      `[20] 运动演化与 vPtr 无关（本版无前馈项）：两者终点都是 ${a.x.toFixed(4)}`);
+    ok(a.x === 0.8, "[20] 且精确落在目标（不再被冻结的速度推偏）");
   }
 
   // ── 接线层：真实的"指针移动 → 停住"必须停在指针处 ──

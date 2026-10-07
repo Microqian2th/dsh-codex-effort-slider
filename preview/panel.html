@@ -241,25 +241,30 @@ function clampAbs(value, limit) {
     }
 
 function motionStep(m, dt, p) {
-      // 1) 指针速度前馈（**必须限幅**：不限幅会顶到 amax 反而生硬）
-      var pv = clampAbs(m.vPtr, p.vmax);
-      // 2) 期望加速度 = 位置误差项 + 速度误差项（临界阻尼）
+      // 1) 由**位置误差**算出「期望速度」——两个映射取小：
+      //    · K·|e|        ：线性"位置→速度"映射，**这是为连续力律设计的**
+      //    · √(2·A·|e|)   ：刹车预测上限（"以当前距离最多还能多快"）
+      //    · vmax         ：硬上限
       var e = m.target - m.x;
-      var aWanted = p.omega * p.omega * e + 2 * p.zeta * p.omega * (pv - m.v);
-      var aClamped = clampAbs(aWanted, p.amax);
-      // 3) 加速度本身受**加加速度**限制 → 这是"不咯噔"的来源
-      m.a += clampAbs(aClamped - m.a, p.jmax * dt);
-      // 4) 速度与位置
+      var vAbs = p.K * Math.abs(e);
+      var brake = Math.sqrt(2 * p.A * Math.abs(e));
+      if (brake < vAbs) vAbs = brake;
+      if (vAbs > p.vmax) vAbs = p.vmax;
+      var vDesired = e > 0 ? vAbs : (e < 0 ? -vAbs : 0);
+      // 2) 由**速度差**算出加速度（连续跟踪）
+      m.a = clampAbs(p.k * (vDesired - m.v), p.amax);
+      // 3) 积分
       m.v = clampAbs(m.v + m.a * dt, p.vmax);
       var xRaw = m.x + m.v * dt;
       var xClamped = xRaw < 0 ? 0 : (xRaw > 1 ? 1 : xRaw);
-      // 5) 边界：位置夹住；速度按 amax·dt 回零（**绝不能瞬间清零** —— 那是跳变源）
+      // 4) 边界：位置夹住时**必须同时停住朝外的速度**，否则会在端点顶住抖动
       if (xClamped !== xRaw && ((xClamped === 0 && m.v < 0) || (xClamped === 1 && m.v > 0))) {
-        var dv = p.amax * dt;
-        m.v = m.v > 0 ? Math.max(0, m.v - dv) : Math.min(0, m.v + dv);
+        m.v = 0;
         m.a = 0;
       }
       m.x = xClamped;
+      // 5) 收口：到位时对齐目标（消除浮点残差，否则帧循环会为 1e-6 一直转）
+      if (motionSettled(m, p)) { m.x = m.target; m.v = 0; m.a = 0; }
       return m;
     }
 
@@ -283,8 +288,8 @@ var ROW_PADDING_BLOCK = "10px";
 var TRACK_HEIGHT = 28;
 var KNOB_SIZE = 28;
 var KNOB_RADIUS = 14;
-var MOTION = {"omega":30,"zeta":1,"amax":240,"vmax":6,"jmax":9600,"epsX":0.0015,"epsV":0.02};
-var MOTION_REDUCED = {"omega":60,"zeta":1,"amax":1200,"vmax":20,"jmax":60000,"epsX":0.0015,"epsV":0.02};
+var MOTION = {"K":20,"A":120,"k":40,"amax":240,"vmax":6,"epsX":0.0015,"epsV":0.02};
+var MOTION_REDUCED = {"K":120,"A":600,"k":200,"amax":1200,"vmax":20,"epsX":0.0015,"epsV":0.02};
 var RELEASE_PROJECT_S = 0.08;
 var POINTER_SPEED_EMA = 0.4;
 var POINTER_STALE_S = 0.03333333333333333;

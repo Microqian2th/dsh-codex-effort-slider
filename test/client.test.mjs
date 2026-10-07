@@ -1242,9 +1242,10 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
       for (let k = 0; k < 6; k += 1) await Promise.resolve();
     }
 
-    // 指针停住：不再有任何 pointermove，让循环继续跑
+    // 指针停住：不再有任何 pointermove。**手指仍按着**，所以循环应当常驻
+    // （这正是修掉"拖动时瞬间卡顿"的做法：追平后不停循环，避免重启第一帧白费）。
     let framesAfterStop = 0;
-    for (let f = 0; f < 400; f += 1) {
+    for (let f = 0; f < 90; f += 1) {
       const e = c.flushFrames(1, 16);
       for (let k = 0; k < 6; k += 1) await Promise.resolve();
       if (e === 0) break;
@@ -1256,8 +1257,62 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
     const offset = finalPct - lastPct;
     ok(Math.abs(offset) < 0.01,
       `[20] 指针停住后滑块停在指针处（偏移 ${(offset * 100).toFixed(3)}%，旧代码是 +13.33%）`);
-    ok(framesAfterStop < 200,
-      `[20] 指针停住后帧循环自行停止（${framesAfterStop} 帧），不空转烧 CPU`);
+    ok(framesAfterStop >= 80,
+      `[20] 拖动中（手指未松）帧循环**保持常驻**（跑了 ${framesAfterStop} 帧）—— 避免重启第一帧白费`);
+
+    // 真正该"停"的时机：松手之后
+    track(c.react).fire("onPointerUp", {});
+    let framesAfterRelease = 0;
+    for (let f = 0; f < 400; f += 1) {
+      const e = c.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      if (e === 0) break;
+      framesAfterRelease += 1;
+    }
+    ok(framesAfterRelease < 300,
+      `[20] 松手并吸附完成后帧循环自行停止（${framesAfterRelease} 帧），不空转烧 CPU`);
+  }
+
+  // ⚠️ 拖动中段不能有"该动没动"的帧 —— 这是"瞬间卡顿"的回归断言。
+  //    旧代码在拖动中"追上指针"就停循环，下一个 pointermove 再 startFrames()，
+  //    而 startFrames 会重置时间基准 → 重启第一帧 dt≈0 → **那一帧位移为 0**
+  //    （实测：指针只挪 0.5% 后循环 7 帧就停；重启第 1 帧位移 0.0000%、
+  //      第 2 帧才 0.2100%）。慢拖最容易触发，所以用户体感是"偶尔卡一下"。
+  {
+    const c = await setup();
+    const W = 300;
+    const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
+    const readPct = () => pctOf(c.react.find("knob").style.left);
+    const at = (pct) => 14 + pct * (W - 28);
+
+    // 按下并追到位
+    track(c.react).fire("onPointerDown", { clientX: at(0.1), pointerId: 1 });
+    for (let f = 0; f < 400; f += 1) {
+      const e = c.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      if (e === 0) break;
+    }
+
+    // 匀速慢拖 40 帧（每帧指针走 0.4% ≈ 1px，最容易触发"追平→停循环"）
+    const jumps = [];
+    let prev = readPct();
+    for (let f = 0; f < 40; f += 1) {
+      c.advanceClock(16);
+      const want = 0.1 + (f + 1) * 0.004;
+      track(c.react).fire("onPointerMove", { clientX: at(want) });
+      c.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      const now = readPct();
+      jumps.push(now - prev);
+      prev = now;
+    }
+    const stalled = jumps.filter((d) => Math.abs(d) < 1e-7).length;
+    const maxJump = Math.max(...jumps);
+    const minJump = Math.min(...jumps);
+    ok(stalled === 0, `[20] 慢拖 40 帧里没有"该动没动"的帧（停滞 ${stalled} 帧）`);
+    ok(minJump > 0, `[20] 每一帧都在推进（最小位移 ${(minJump * 100).toFixed(4)}%）`);
+    ok(maxJump < minJump * 4 + 1e-9,
+      `[20] 位移均匀：最大 ${(maxJump * 100).toFixed(4)}% / 最小 ${(minJump * 100).toFixed(4)}% = ${(maxJump / minJump).toFixed(2)}× < 4×`);
   }
 
   // ── 松手外推不被污染的 vPtr 带偏 ──

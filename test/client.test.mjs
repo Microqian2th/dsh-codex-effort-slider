@@ -1324,6 +1324,129 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
   }
 }
 
+section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
+{
+  // 复现用户报的 bug：滑块拖到 max → 官方菜单选 low → 在滑块里点 max → 瞬移到 max。
+  //
+  // 根因：官方菜单是 pane 状态机（root/model/effort），点进"推理等级"后 root 那一块
+  // 被替换、滑条不渲染；选完档位回来时 effectivePct 已变，而引擎 x 只被"滑条自己的
+  // 操作"更新 —— 它不知道官方改了档位。
+  // 于是点 max 时 target=1.0 而 x 已=1.0 → 一帧内 settled → 显示从 1/3 跳成 1.0。
+  //
+  // 用 host.store.set 模拟官方那条改档路径（真机里就是 ModelSelect 的 submit）。
+  const W = 300;
+  const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
+
+  async function scene21() {
+    const document = createDocument();
+    const menu = createOfficialMenu(document, {});
+    const bundle = loadBundle(BUNDLE, document, {});
+    const host = createFakeHost({});
+    bundle.plugin.apply(host.ctx);
+    bundle.react.mount(host.registered[0].Component, { sessionId: "session-abcdef" }, menu.composer);
+    await settle();
+    const react = bundle.react;
+    return {
+      bundle, host, menu, react,
+      track: () => { const n = react.find("track"); if (n) n.rect = { left: 0, top: 0, right: W, bottom: 28, width: W, height: 28 }; return n; },
+      readPct: () => pctOf(react.find("knob").style.left),
+      at: (pct) => 14 + pct * (W - 28),
+      /** 模拟官方菜单改档：直接改共享 store（= ModelSelect 的 submit 效果） */
+      officialSelectTo(id) {
+        const snap = host.store.getSnapshot();
+        host.store.set({ ...snap, current: { ...snap.current, reasoningEffort: id } });
+      },
+    };
+  }
+  async function pump21(s, n = 1, dt = 16) {
+    for (let i = 0; i < n; i += 1) {
+      const e = s.bundle.flushFrames(1, dt);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      if (e === 0) return i;
+    }
+    return n;
+  }
+  /** 按一下，返回"第 0 帧后"的位置（必须先落定微任务才能读到新渲染） */
+  async function tapFirstFrame(s, pct) {
+    const before = s.readPct();
+    s.track().fire("onPointerDown", { clientX: s.at(pct), pointerId: 1 });
+    for (let k = 0; k < 6; k += 1) await Promise.resolve();
+    s.bundle.flushFrames(1, 16);
+    for (let k = 0; k < 6; k += 1) await Promise.resolve();
+    return { before, after: s.readPct() };
+  }
+
+  // ① 用户的确切步骤：拖到 max → 官方选 low → 点 max
+  {
+    const s = await scene21();
+    s.track().fire("onPointerDown", { clientX: s.at(1.0), pointerId: 1 });
+    await pump21(s, 200);
+    s.track().fire("onPointerUp", {});
+    await pump21(s, 200);
+    await settle();
+    near(s.readPct(), 1.0, "[21] 前置：滑块先拖到 max", 1e-3);
+
+    s.officialSelectTo("low");
+    await settle();
+    near(s.readPct(), 1 / 3, "[21] 官方选 low 后显示位置跟到 low", 1e-3);
+
+    const r = await tapFirstFrame(s, 1.0);
+    ok(Math.abs(r.after - r.before) < 0.05,
+      `[21] 点 max 不再瞬移（第 0 帧跳变 ${((r.after - r.before) * 100).toFixed(2)}%，修前是 66.67%）`);
+    await pump21(s, 40);
+    near(s.readPct(), 1.0, "[21] 之后平滑滑到 max", 1e-2);
+  }
+
+  // ② 点"当前显示位置"应当完全不动（引擎起点正确的最强证据）
+  {
+    const s = await scene21();
+    s.track().fire("onPointerDown", { clientX: s.at(1.0), pointerId: 1 });
+    await pump21(s, 200);
+    s.track().fire("onPointerUp", {});
+    await pump21(s, 200);
+    await settle();
+    s.officialSelectTo("low");
+    await settle();
+    const r = await tapFirstFrame(s, 1 / 3);
+    ok(Math.abs(r.after - r.before) < 0.02,
+      `[21] 点"显示中的位置"完全不动（第 0 帧跳变 ${((r.after - r.before) * 100).toFixed(2)}%）`);
+  }
+
+  // ③ 连续多轮"官方改档 → 滑块操作"都不跳变
+  {
+    const s = await scene21();
+    const ids = ["off", "low", "high", "max"];
+    let worst = 0;
+    for (let round = 0; round < 4; round += 1) {
+      s.track().fire("onPointerDown", { clientX: s.at(1.0), pointerId: 1 });
+      await pump21(s, 200);
+      s.track().fire("onPointerUp", {});
+      await pump21(s, 200);
+      await settle();
+      s.officialSelectTo(ids[round]);
+      await settle();
+      const r = await tapFirstFrame(s, 0.5);
+      worst = Math.max(worst, Math.abs(r.after - r.before));
+      s.track().fire("onPointerUp", {});
+      await pump21(s, 200);
+      await settle();
+    }
+    ok(worst < 0.05, `[21] 连续 4 轮"官方改档 → 滑块操作"最大跳变 ${(worst * 100).toFixed(2)}% < 5%`);
+  }
+
+  // ④ ⚠️ 反向保护：修法不能破坏写回（曾把对齐放进 ensureMotion 导致写回变 0 次）
+  {
+    const s = await scene21();
+    s.track().fire("onPointerDown", { clientX: 0, pointerId: 1 });
+    for (let i = 1; i <= 60; i += 1) s.track().fire("onPointerMove", { clientX: (i / 60) * 300 });
+    s.track().fire("onPointerUp", {});
+    await settle();
+    ok(s.host.selects.length >= 1 && s.host.selects.length <= 3,
+      `[21] 60 次拖动仍正常写回 ${s.host.selects.length} 次（1~3；修法若破坏写回会变 0）`);
+    eq(s.host.selects[s.host.selects.length - 1].reasoningEffort, "max", "[21] 最后一次写回的是落点档位");
+  }
+}
+
 /* ══════════════════════════════════════════════════════════════════════ */
 
 console.log(`\n${failed === 0 ? "全部通过 ✅" : "有失败 ❌"} （${passed} 项通过，${failed} 项失败）`);

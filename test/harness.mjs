@@ -687,6 +687,11 @@ export function loadBundle(bundlePath, document, options = {}) {
   let registration = null;
   /** MutationObserver 桩：只记录回调，由测试显式触发（这样扫描是确定性的，不靠计时）。 */
   const observers = [];
+  /** 假时钟（毫秒）：rAF 帧时间戳与 performance.now 都读它，保证测试完全确定。 */
+  let clock = 0;
+  /** 待执行的 rAF 回调队列（flushFrames 消费）。 */
+  const frameQueue = [];
+  function clockNow() { return clock; }
   function MutationObserverStub(callback) {
     this.callback = callback;
     this.targets = [];
@@ -709,6 +714,24 @@ export function loadBundle(bundlePath, document, options = {}) {
     MutationObserver: MutationObserverStub,
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (handle) => clearInterval(handle),
+    /**
+     * **可控的 requestAnimationFrame 桩**。
+     *
+     * 连续运动引擎靠帧循环推进；真实 rAF 由浏览器调度，离线测试里既不存在、
+     * 也无法确定性地断言"第 N 帧的位置"。所以这里把它做成**手动泵**：
+     * 回调入队，由测试用 flushFrames() 显式推进固定步长。
+     *
+     * 这样引擎的每条性质（连续性、零过冲、收敛）都能用**固定 dt** 精确验证，
+     * 不依赖真实时钟 —— 这正是这次改造能离线证明"不咯裂"的前提。
+     */
+    requestAnimationFrame(callback) {
+      frameQueue.push({ callback, cancelled: false });
+      return frameQueue.length; // 句柄 = 队列下标（1 起）
+    },
+    cancelAnimationFrame(handle) {
+      const entry = frameQueue[handle - 1];
+      if (entry) entry.cancelled = true;
+    },
     /** 只实现本插件会查的那条媒体查询（系统「减少动态效果」）。 */
     matchMedia(query) {
       return {
@@ -719,10 +742,33 @@ export function loadBundle(bundlePath, document, options = {}) {
       };
     },
   };
+  /**
+   * 推进 `count` 帧，每帧步长 `dtMs` 毫秒。
+   * 语义与真实 rAF 一致：**只执行本帧开始时已入队的回调**，回调里新排的帧留到下一轮。
+   * 返回实际执行的帧数。
+   */
+  function flushFrames(count = 1, dtMs = 16) {
+    let executed = 0;
+    for (let i = 0; i < count; i += 1) {
+      const batch = frameQueue.splice(0, frameQueue.length);
+      const live = batch.filter((entry) => !entry.cancelled);
+      if (live.length === 0) break;
+      for (const entry of live) entry.callback(clockNow());
+      clock += dtMs; // 时间只在**帧执行后**前进，与真实 rAF 的时间戳语义一致
+      executed += 1;
+    }
+    return executed;
+  }
+  /** 手动推进时钟（毫秒），让"指针速度"这类基于时间的量可控。 */
+  function advanceClock(ms) { clock += ms; return clock; }
+  /** 当前假时钟值（毫秒）。 */
+  function clockNow() { return clock; }
   const code = readFileSync(bundlePath, "utf8");
   // 只给这个 bundle 传它真正依赖的宿主全局；其余走真实全局（Promise/Set/Math/Date…）。
-  const run = new Function("window", "document", "console", "setTimeout", "clearTimeout", code);
-  run(window, document, console, setTimeout, clearTimeout);
+  // performance 单独传**假时钟**：引擎的"指针速度/松手外推"都读它，必须可控。
+  const performanceStub = { now: () => clockNow() };
+  const run = new Function("window", "document", "console", "setTimeout", "clearTimeout", "performance", code);
+  run(window, document, console, setTimeout, clearTimeout, performanceStub);
   if (registration === null) throw new Error("bundle 没有调用 window.__ModuleLoader__.load()");
   const react = createReactStub();
   const plugin = registration.factory((spec) => {
@@ -735,7 +781,10 @@ export function loadBundle(bundlePath, document, options = {}) {
   const flushObservers = () => {
     for (const observer of observers) observer.trigger();
   };
-  return { registration, plugin, react, window, document, observers, flushObservers };
+  return {
+    registration, plugin, react, window, document, observers, flushObservers,
+    flushFrames, advanceClock, clockNow,
+  };
 }
 
 /** 让微任务、渲染和 promise 链都落定。 */

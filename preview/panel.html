@@ -235,10 +235,66 @@ function valueColorFor(pct, level) {
       return rgbOf(mixColor(COLOR_BLUE, COLOR_TEXT_VIOLET, energyFor(pct)));
     }
 
+function clampAbs(value, limit) {
+      if (value > limit) return limit;
+      return value < -limit ? -limit : value;
+    }
+
+function motionStep(m, dt, p) {
+      // 1) 由**位置误差**算出「期望速度」——两个映射取小：
+      //    · K·|e|        ：线性"位置→速度"映射，**这是为连续力律设计的**
+      //    · √(2·A·|e|)   ：刹车预测上限（"以当前距离最多还能多快"）
+      //    · vmax         ：硬上限
+      var e = m.target - m.x;
+      var vAbs = p.K * Math.abs(e);
+      var brake = Math.sqrt(2 * p.A * Math.abs(e));
+      if (brake < vAbs) vAbs = brake;
+      if (vAbs > p.vmax) vAbs = p.vmax;
+      var vDesired = e > 0 ? vAbs : (e < 0 ? -vAbs : 0);
+      // 2) 由**速度差**算出加速度（连续跟踪）
+      m.a = clampAbs(p.k * (vDesired - m.v), p.amax);
+      // 3) 积分
+      m.v = clampAbs(m.v + m.a * dt, p.vmax);
+      var xRaw = m.x + m.v * dt;
+      var xClamped = xRaw < 0 ? 0 : (xRaw > 1 ? 1 : xRaw);
+      // 4) 边界：位置夹住时**必须同时停住朝外的速度**，否则会在端点顶住抖动
+      if (xClamped !== xRaw && ((xClamped === 0 && m.v < 0) || (xClamped === 1 && m.v > 0))) {
+        m.v = 0;
+        m.a = 0;
+      }
+      m.x = xClamped;
+      // 5) 收口：到位时对齐目标（消除浮点残差，否则帧循环会为 1e-6 一直转）
+      if (motionSettled(m, p)) { m.x = m.target; m.v = 0; m.a = 0; }
+      return m;
+    }
+
+function motionSettled(m, p) {
+      return Math.abs(m.target - m.x) < p.epsX && Math.abs(m.v) < p.epsV;
+    }
+
+function decayPointerSpeed(vPtr, sinceS, staleS, tau) {
+      if (!(sinceS > staleS)) return vPtr;
+      return vPtr * Math.exp(-(sinceS - staleS) / tau);
+    }
+
+function releaseIndexFor(targetPct, vPtr, count) {
+      return indexFromPct(clamp01(targetPct + vPtr * RELEASE_PROJECT_S), count);
+    }
+
+/* ⚠️ 这里**由 constantNames 自动生成**，不再手写清单 ——
+   早先手写过，结果新增常量忘了加，预览页一按下就 ReferenceError 整页挂掉。
+   手写清单与 constantNames 必须同步，这种"两处维护"迟早漏一侧。 */
 var ROW_PADDING_BLOCK = "10px";
 var TRACK_HEIGHT = 28;
 var KNOB_SIZE = 28;
 var KNOB_RADIUS = 14;
+var MOTION = {"K":20,"A":120,"k":40,"amax":240,"vmax":6,"epsX":0.0015,"epsV":0.02};
+var MOTION_REDUCED = {"K":120,"A":600,"k":200,"amax":1200,"vmax":20,"epsX":0.0015,"epsV":0.02};
+var RELEASE_PROJECT_S = 0.08;
+var POINTER_SPEED_EMA = 0.4;
+var POINTER_STALE_S = 0.03333333333333333;
+var POINTER_SPEED_TAU = 0.03;
+var MAX_FRAME_DT = 0.05;
 var BASE_SPEEDUP = 4;
 var STARFIELD_DURATION_MEAN = 1.5;
 var STARFIELD_DURATION_SPREAD = 0.08;
@@ -391,20 +447,93 @@ function pctAt(clientX) {
   return clamp01((clientX - rect.left - KNOB_RADIUS) / usable);
 }
 
+/* ── 连续运动引擎（与真插件同一份函数 + 同一套参数）──
+   预览页也要逐帧跑引擎，否则观感与真插件不一致（这正是当初踩过的坑：
+   预览页"看起来好了"但真插件不一样）。 */
+var motion = { x: index / (LEVELS[current].length - 1), v: 0, a: 0, target: 0, vPtr: 0 };
+var frameHandle = null;
+var lastTs = 0;
+var lastPtrPct = null;
+/** 上次 pointermove 的时刻（衰减判定与指针速度都用它，不能用帧时刻 lastTs）。 */
+var lastPointerAt = 0;
+var snapIndex = null;
+
+function nowMs() {
+  return (typeof performance !== "undefined" && typeof performance.now === "function")
+    ? performance.now() : Date.now();
+}
+function scheduleFrame(cb) {
+  if (typeof requestAnimationFrame === "function") return { raf: true, id: requestAnimationFrame(cb) };
+  return { raf: false, id: setTimeout(function () { cb(nowMs()); }, 16) };
+}
+function cancelFrame(h) {
+  if (!h) return;
+  if (h.raf) { if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(h.id); }
+  else clearTimeout(h.id);
+}
+function startFrames() {
+  if (frameHandle !== null) return;
+  lastTs = nowMs();
+  var step = function (ts) {
+    frameHandle = null;
+    var dt = Math.min(MAX_FRAME_DT, Math.max(0.001, (ts - lastTs) / 1000));
+    lastTs = ts;
+    // 指针速度保鲜：指针停下后不再有 pointermove，不衰减就会冻结成恒定的力
+    // （实测会让滑块永久停在鼠标一侧 13% 处，且帧循环永不退出）。
+    // 注意用**距上次 pointermove 的实际时长**，不是帧间隔 dt。
+    motion.vPtr = decayPointerSpeed(motion.vPtr, (ts - lastPointerAt) / 1000, POINTER_STALE_S, POINTER_SPEED_TAU);
+    motionStep(motion, dt, MOTION);
+    if (motionSettled(motion, MOTION)) {
+      motion.x = motion.target; motion.v = 0; motion.a = 0;
+      if (dragging) { render(motion.x); return; }   // 追上了指针，但手指还按着
+      index = snapIndex !== null ? snapIndex : index;
+      snapIndex = null;
+      render();
+      return;
+    }
+    // 拖动中档位跟指针；吸附中冻结在决定的档位
+    index = dragging ? indexFromPct(motion.x, LEVELS[current].length)
+                     : (snapIndex !== null ? snapIndex : index);
+    render(motion.x);
+    frameHandle = scheduleFrame(step);
+  };
+  frameHandle = scheduleFrame(step);
+}
+
 function onMove(clientX) {
   var pct = pctAt(clientX);
   if (pct === null) return;
-  index = indexFromPct(pct, LEVELS[current].length);
-  render(pct);
+  // 指针速度（EMA 平滑）→ 前馈 + 松手外推
+  // ⚠️ 时间基准用**上次 pointermove 的时刻**，不能用帧时刻 lastTs（两者间可能夹着若干帧）
+  var now = nowMs();
+  var dtPtr = (now - lastPointerAt) / 1000;
+  if (lastPtrPct !== null && dtPtr > 0.001) {
+    var raw = (pct - lastPtrPct) / dtPtr;
+    motion.vPtr = motion.vPtr * (1 - POINTER_SPEED_EMA) + clampAbs(raw, MOTION.vmax) * POINTER_SPEED_EMA;
+  }
+  lastPtrPct = pct;
+  lastPointerAt = now;
+  motion.target = pct;   // ← 只改目标
+  startFrames();
 }
 
 track.addEventListener("pointerdown", function (event) {
   dragging = true;
+  snapIndex = null;
+  lastPtrPct = null;
   track.setPointerCapture(event.pointerId);
   onMove(event.clientX);
 });
 track.addEventListener("pointermove", function (event) { if (dragging) onMove(event.clientX); });
-function end() { if (!dragging) return; dragging = false; render(); }
+function end() {
+  if (!dragging) return;
+  dragging = false;
+  // 松手：按指针速度外推落点，目标改为档位点，**速度继承**
+  snapIndex = releaseIndexFor(motion.target, motion.vPtr, LEVELS[current].length);
+  motion.target = pctFromIndex(snapIndex, LEVELS[current].length);
+  motion.vPtr = 0;
+  startFrames();
+}
 track.addEventListener("pointerup", end);
 track.addEventListener("pointercancel", end);
 track.addEventListener("keydown", function (event) {
@@ -423,6 +552,12 @@ track.addEventListener("keydown", function (event) {
 function setLevels(key) {
   current = key;
   index = Math.min(index, LEVELS[key].length - 1);
+  // 切档位模型时把引擎重置到当前档位（否则它会带着旧位置滑过去）
+  cancelFrame(frameHandle);
+  frameHandle = null;
+  motion.x = pctFromIndex(index, LEVELS[key].length);
+  motion.v = 0; motion.a = 0; motion.target = motion.x; motion.vPtr = 0;
+  snapIndex = null;
   render();
 }
 

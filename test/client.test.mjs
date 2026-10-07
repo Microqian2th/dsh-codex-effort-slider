@@ -72,7 +72,49 @@ async function setup(options = {}) {
     host,
     entry,
     internals: bundle.plugin.__internals,
+    // 引擎是**逐帧**推进的，测试必须显式泵帧才能看到位置变化。
+    flushFrames: bundle.flushFrames,
+    advanceClock: bundle.advanceClock,
+    clockNow: bundle.clockNow,
   };
+}
+
+/**
+ * 推进引擎到收敛。
+ *
+ * ⚠️ 两点关键：
+ *  1. 必须**每帧之间让渲染落定**：引擎通过 setDraft 触发 React 重渲染，而测试台
+ *     的渲染是 queueMicrotask 批处理的 —— 一次泵多帧而不落定微任务，读到的还是旧 DOM。
+ *  2. 落定必须用**微任务**而不是 setTimeout：引擎时间走的是假时钟（flushFrames 推进），
+ *     但真实墙上时间若被 setTimeout 拖长，`COMMIT_THROTTLE_MS`(120ms) 的定时器会
+ *     在拖动中途触发、把"已生效档位"改掉，让"拖动中席按钮不乱跳"这类断言变得不确定。
+ */
+async function runFrames(ctx, frames = 90, dtMs = 16) {
+  for (let i = 0; i < frames; i += 1) {
+    const executed = ctx.flushFrames(1, dtMs);
+    for (let m = 0; m < 6; m += 1) await Promise.resolve(); // 只落微任务，不推进墙上时间
+    if (executed === 0) break; // 引擎已停（收敛或未启动）
+  }
+}
+
+/** 按下并把引擎跑到收敛（等价于"按下 → 等它追到位"）。 */
+async function pressAndSettle(ctx, clientX) {
+  track(ctx.react).fire("onPointerDown", { clientX, pointerId: 1 });
+  await runFrames(ctx);
+  await settle();
+}
+
+/** 松手并把吸附动画跑到收敛。 */
+async function releaseAndSettle(ctx) {
+  track(ctx.react).fire("onPointerUp", {});
+  await runFrames(ctx);
+  await settle();
+}
+
+/** 按下但**不**等收敛（用于观察拖动中的中间态）。只落微任务，不推进墙上时间。 */
+async function pressOnly(ctx, clientX) {
+  track(ctx.react).fire("onPointerDown", { clientX, pointerId: 1 });
+  for (let m = 0; m < 6; m += 1) await Promise.resolve();
 }
 
 /** 现查轨道节点并给确定几何（假 DOM 不做布局）。 */
@@ -160,19 +202,23 @@ section("2b. 顶头适配：旋钮与滑条同高，且两端都不越界");
   ok(trackCss.indexOf(`height:${internals.TRACK_HEIGHT}px`) > 0, "[2b] 轨道高度与旋钮直径用同一组常量");
 
   // 指针映射与视觉几何一致：拖到最左必定命中第一档（而不是因为内缩差一点点）
-  const node = track(react, 0, 300);
-  node.fire("onPointerDown", { clientX: 0, pointerId: 1 }); // 远在左端之外
-  node.fire("onPointerUp", {});
-  await settle();
-  eq(react.find("knob").style.left, internals.knobOffsetOf(0), "[2b] 拖到最左 → 旋钮贴左端圆角内（圆心不越界）");
-  eq(host.selects[host.selects.length - 1].reasoningEffort, "off", "[2b] 最左端映射到第一档");
+  {
+    const d = await setup();
+    track(d.react, 0, 300).fire("onPointerDown", { clientX: 0, pointerId: 1 }); // 远在左端之外
+    await pressAndSettle(d, 0);
+    releaseAndSettle(d);
+    eq(d.react.find("knob").style.left, internals.knobOffsetOf(0), "[2b] 拖到最左 → 旋钮贴左端圆角内（圆心不越界）");
+    eq(d.host.selects[d.host.selects.length - 1].reasoningEffort, "off", "[2b] 最左端映射到第一档");
+  }
 
   // 右端同理
-  track(react, 0, 300).fire("onPointerDown", { clientX: 300, pointerId: 1 });
-  track(react).fire("onPointerUp", {});
-  await settle();
-  eq(react.find("knob").style.left, internals.knobOffsetOf(1), "[2b] 拖到最右 → 旋钮贴右端圆角内（不会被菜单裁掉）");
-  eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[2b] 最右端映射到最高档");
+  {
+    const d = await setup();
+    await pressAndSettle(d, 300);
+    releaseAndSettle(d);
+    eq(d.react.find("knob").style.left, internals.knobOffsetOf(1), "[2b] 拖到最右 → 旋钮贴右端圆角内（不会被菜单裁掉）");
+    eq(d.host.selects[d.host.selects.length - 1].reasoningEffort, "max", "[2b] 最右端映射到最高档");
+  }
 }
 
 section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-open）");
@@ -371,8 +417,8 @@ section("8. 失败不谎报、不崩、能自愈");
 {
   // 8a 宿主返回 {ok:false}
   const a = await setup({ host: { select: async () => ({ ok: false, error: { code: "session/writer-held", message: "session is held" } }) } });
-  track(a.react).fire("onPointerDown", { clientX: 290, pointerId: 1 });
-  track(a.react).fire("onPointerUp", {});
+  await pressAndSettle(a, 290);
+  await releaseAndSettle(a);
   await settle(14);
   ok(a.react.find("error") !== null, "[8] 写回失败 → 行里显示错误");
   ok(String(a.react.find("error").textContent).indexOf("session is held") >= 0, "[8] 错误里带宿主给的原始原因");
@@ -382,8 +428,8 @@ section("8. 失败不谎报、不崩、能自愈");
   const b = await setup({ host: { select: () => { throw new Error("boom"); } } });
   let threw = false;
   try {
-    track(b.react).fire("onPointerDown", { clientX: 290, pointerId: 1 });
-    track(b.react).fire("onPointerUp", {});
+    await pressAndSettle(b, 290);
+    await releaseAndSettle(b);
     await settle(14);
   } catch (error) {
     threw = true;
@@ -424,7 +470,8 @@ section("9. 快照身份稳定（否则 uSES 会把渲染打成死循环）");
 
 section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越来越密）");
 {
-  const { react, internals, menu, host } = await setup();
+  const ctx10 = await setup();
+  const { react, internals, menu, host } = ctx10;
   const T = internals.ENERGY_START; // 1/3：第二档
   const H = internals.ENERGY_END; // 2/3：high 档（4 档模型）
   // 初始停在 high（pct = 2/3）：新模型下这里能量是 0.5、一半粒子、紫填充
@@ -465,9 +512,8 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(highDur / internals.starDurationFor(0, internals.speedFor(1)) > 1.7, "[10] 速度变化保留：high 比 MAX 慢近一倍");
 
   // 第二档（low，pct=1/3）：纯蓝、没有粒子、没有星云
-  track(react).fire("onPointerDown", { clientX: internals.KNOB_RADIUS + T * (300 - 2 * internals.KNOB_RADIUS), pointerId: 1 });
-  track(react).fire("onPointerUp", {});
-  await settle();
+  await pressAndSettle(ctx10, internals.KNOB_RADIUS + T * (300 - 2 * internals.KNOB_RADIUS));
+  await releaseAndSettle(ctx10);
   eq(react.find("root").getAttribute("data-energy"), "0", "[10] 第二档：能量层关闭");
   eq(react.find("root").style["--ces-energy"], "0", "[10] 能量强度 0");
   eq(react.findAll("particle").length, 0, "[10] 第二档没有粒子（干净蓝）");
@@ -506,8 +552,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(internals.speedFor(0.9) > internals.speedFor(0.7), "[10] 速率随位置递增");
 
   // ── 渲染出来的东西要跟这些函数一致
-  track(react).fire("onPointerDown", { clientX: 300, pointerId: 1 }); // 最右
-  await settle();
+  await pressAndSettle(ctx10, 300); // 最右
   eq(react.find("root").getAttribute("data-energy"), "1", "[10] 最高档：能量层开启");
   eq(react.find("root").style["--ces-energy"], "1", "[10] 最高档能量强度 = 1");
   eq(react.findAll("particle").length, internals.PARTICLES.length, "[10] 最高档粒子全出（渲染一致）");
@@ -571,8 +616,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(Math.min(...brightness) < 0.7 && Math.max(...brightness) > 0.9, `[10] 亮度铺开到两端（${Math.min(...brightness).toFixed(2)}~${Math.max(...brightness).toFixed(2)}）`);
   ok(internals.starBrightnessFor(0) === internals.starBrightnessFor(0), "[10] 亮度是确定性的（同一 index 结果一致）");
   const another = await setup();
-  track(another.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
-  await settle();
+  await pressAndSettle(another, 300);
   eq(
     JSON.stringify(another.react.findAll("particle").map((n) => Number(n.getAttribute("data-brightness")))),
     JSON.stringify(brightness),
@@ -583,8 +627,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(new Set(delays.map((d) => d.toFixed(2))).size > 10, "[10] 相位铺开（均匀分布在轨道上）");
 
   // ── 拖回 high：同一套星空动画，但**慢一倍**（速度变化保留）
-  track(react).fire("onPointerDown", { clientX: internals.KNOB_RADIUS + H * (300 - 2 * internals.KNOB_RADIUS), pointerId: 1 });
-  await settle();
+  await pressAndSettle(ctx10, internals.KNOB_RADIUS + H * (300 - 2 * internals.KNOB_RADIUS));
   near(Number(react.find("root").style["--ces-energy"]), 0.5, "[10] 拖到 high：--ces-energy = 0.5");
   eq(react.findAll("particle").length, 11, "[10] 拖到 high：11 颗星星");
   eq(react.findAll("star").length, 11, "[10] 拖到 high：仍然是星空轨道（动画已统一）");
@@ -680,7 +723,8 @@ section("13. 宿主半边（lib/index.js）");
 
 section("14. 官方数值文字（Max / High）的颜色");
 {
-  const { react, internals, menu } = await setup();
+  const ctx14 = await setup();
+  const { react, internals, menu } = ctx14;
   const H = internals.ENERGY_END;
   // 只改颜色，一个字的文字都不碰
   eq(menu.effortValueEl.textContent, "High", "[14] 文字内容没被动过");
@@ -720,8 +764,7 @@ section("14. 官方数值文字（Max / High）的颜色");
   ok(sum(internals.valueColorFor(1)) > sum(internals.valueColorFor(H)), "[14] 最高档比 high 更亮（越往右越通电）");
 
   // 拖到最高档 → 文字变成紫罗兰
-  track(react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
-  await settle();
+  await pressAndSettle(ctx14, 300);
   eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[14] 拖到 Max：文字直接变紫罗兰");
   eq(menu.effortValueEl.textContent, "High", "[14] 文字内容仍然由官方自己管（没被我们改写）");
 
@@ -754,15 +797,14 @@ section("15. 收起态模型席按钮上的档位（点开之前就看得见）"
   ok(closed.react.find("track") === null, "[15] 菜单没打开时不注入滑条（前置条件，说明上面那条不是靠滑条生效的）");
 
   // 打开菜单后：拖动改档位 → 菜单里的数值跟着草稿、席上的档位跟已生效
-  const { react, internals, menu, bundle, document } = await setup();
+  const ctx15 = await setup();
+  const { react, internals, menu, bundle, document } = ctx15;
 
   // 拖动中：官方席显示的是**已生效**档位，所以它的颜色不该跟着草稿跑
-  track(react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
-  await settle();
+  await pressAndSettle(ctx15, 300);
   eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[15] 菜单里那一行跟着草稿变成 Max 色");
   eq(menu.seatEffortEl.style.color, internals.valueColorFor(H), "[15] 席按钮仍按已生效档位着色（拖动中不乱跳）");
-  track(react).fire("onPointerUp", {});
-  await settle();
+  await releaseAndSettle(ctx15);
   eq(menu.seatEffortEl.style.color, "rgb(139,92,246)", "[15] 提交后席按钮跟上 Max 色");
   eq(menu.seatEffortEl.textContent, "High", "[15] 文字仍然由官方自己管（我们只改颜色）");
 
@@ -818,12 +860,10 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   eq(off.menu.effortValueEl.textContent, "Off", "[16] 文字内容仍然是官方的");
   ok(!off.menu.seatLabelEl.style.color, "[16] 模型名依旧不动");
   // 拖到 Max 就恢复着色（确认"灰"只发生在 off 档）
-  track(off.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
-  await settle();
+  await pressAndSettle(off, 300);
   eq(off.menu.effortValueEl.style.color, "rgb(139,92,246)", "[16] 拖到 Max：菜单里那一行先变紫罗兰");
   eq(off.menu.seatEffortEl.style.color, "", "[16] 席按钮按已生效档位（仍是 off）→ 还是灰的");
-  track(off.react).fire("onPointerUp", {});
-  await settle();
+  await releaseAndSettle(off);
   eq(off.menu.seatEffortEl.style.color, "rgb(139,92,246)", "[16] 提交后席按钮也变成紫罗兰");
 
   // 刻度点：更小更淡
@@ -833,6 +873,348 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   ok(internals.CSS.indexOf(".ces-tick[data-on='1']{background:rgba(255,255,255,.5)}") > 0, "[16] 已达刻度 92% → 50% 白（更淡，不再和星星抢眼）");
   const tickNodes = off.react.findAll("tick");
   ok(tickNodes.length >= 4, `[16] 4 档就有 4 个刻度点（实测 ${tickNodes.length}）`);
+}
+
+/* ══════════════════════════════════════════════════════════════════════ */
+
+section("17. 连续运动引擎：纯函数层（注入固定 dt，不依赖时钟）");
+{
+  const ctx = await setup();
+  const I = ctx.internals;
+  const P = I.MOTION;
+  const DT = 1 / 60;
+
+  /** 跑一串帧，返回轨迹。 */
+  function trace(init, frames, mutate) {
+    const m = Object.assign({ x: 0, v: 0, a: 0, target: 0, vPtr: 0 }, init);
+    const rows = [];
+    let maxDv = 0, prevV = m.v, maxDa = 0, prevA = m.a;
+    for (let f = 0; f < frames; f += 1) {
+      if (mutate) mutate(m, f);
+      I.motionStep(m, DT, P);
+      maxDv = Math.max(maxDv, Math.abs(m.v - prevV));
+      maxDa = Math.max(maxDa, Math.abs(m.a - prevA));
+      prevV = m.v; prevA = m.a;
+      rows.push({ x: m.x, v: m.v, a: m.a, target: m.target });
+    }
+    return { m, rows, maxDv, maxDa };
+  }
+
+  // ① 参数自洽：jmax/amax = 加速度爬坡时间，必须在 15~40ms（太快会瞬间反向，太慢前馈失效）
+  const rampMs = (P.amax / P.jmax) * 1000;
+  ok(rampMs >= 15 && rampMs <= 40, `[17] 加速度爬坡时间 ${rampMs.toFixed(0)}ms 在 15~40ms（连续性 ↔ 响应性的平衡点）`);
+  eq(P.zeta, 1, "[17] 阻尼比 = 1（临界阻尼：数学上无过冲）");
+  ok(P.vmax > 0 && P.amax > 0 && P.jmax > 0 && P.omega > 0, "[17] 四个限幅/增益都是正数");
+
+  // ② 零过冲：全程 0→1 不得越过目标
+  {
+    const r = trace({ target: 1 }, 200);
+    const overshoot = Math.max(0, ...r.rows.map((row) => row.x - 1));
+    ok(overshoot < 1e-6, `[17] 全程 0→1 零过冲（实测 ${overshoot.toExponential(2)}）`);
+  }
+
+  // ③ 必收敛：三个不同距离都要停住（常数增益那版会极限环振荡不休）
+  for (const target of [1, 0.5, 0.02]) {
+    const r = trace({ target }, 400);
+    const settled = I.motionSettled(r.m, P);
+    ok(settled, `[17] 目标 ${target} 必收敛（无极限环）：最终 x=${r.m.x.toFixed(5)} v=${r.m.v.toFixed(5)}`);
+  }
+
+  // ④ 连续性：帧间 Δv 不超过 amax·dt（除非该帧撞边界）
+  {
+    const r = trace({ target: 1 }, 200);
+    const limit = P.amax * DT + 1e-9;
+    ok(r.maxDv <= limit, `[17] 帧间 Δv ${r.maxDv.toFixed(3)} ≤ amax·dt ${limit.toFixed(3)}（速度连续）`);
+  }
+
+  // ⑤ 加加速度受限：帧间 Δa 不超过 jmax·dt
+  {
+    // 频繁反向，最考验连续性
+    const r = trace({ target: 1 }, 240, (m, f) => { m.target = (Math.floor(f / 30) % 2 === 0) ? 1 : 0; });
+    const limit = P.jmax * DT + 1e-9;
+    ok(r.maxDa <= limit, `[17] 帧间 Δa ${r.maxDa.toFixed(3)} ≤ jmax·dt ${limit.toFixed(3)}（加速度连续 = 不咯噔）`);
+  }
+
+  // ⑥ 满速反向：必须"先滑行再掉头"，不是瞬间反向
+  {
+    const m = { x: 0, v: 0, a: 0, target: 1, vPtr: P.vmax };
+    for (let f = 0; f < 60 && m.v < P.vmax * 0.95; f += 1) I.motionStep(m, DT, P);
+    const speedBefore = m.v;
+    let sameDirFrames = 0;
+    let firstNeg = -1;
+    for (let f = 0; f < 60; f += 1) {
+      m.target = 0; m.vPtr = -P.vmax;
+      I.motionStep(m, DT, P);
+      if (m.v > 0) sameDirFrames += 1;
+      if (firstNeg < 0 && m.v < 0) { firstNeg = f; break; }
+    }
+    ok(speedBefore > P.vmax * 0.5, `[17] 前置：反向时确实在满速附近（v=${speedBefore.toFixed(2)}）`);
+    ok(sameDirFrames >= 2, `[17] 满速反向后有 ${sameDirFrames} 帧仍朝原方向滑行（可见的"先滑后掉头"，不是瞬间反向）`);
+  }
+
+  // ⑦ 边界：拖到轨道外，位置夹在 [0,1]，速度不跳变
+  {
+    for (const target of [-0.5, 1.5]) {
+      const r = trace({ x: 0.5, target }, 120);
+      ok(r.m.x >= 0 && r.m.x <= 1, `[17] 目标 ${target}：位置被夹在 [0,1]（实测 ${r.m.x.toFixed(4)}）`);
+      ok(r.maxDv <= P.amax * DT + 1e-9, `[17] 目标 ${target}：撞墙帧 Δv ${r.maxDv.toFixed(3)} 也未超限（不瞬间清零）`);
+    }
+  }
+
+  // ⑧ 前馈：带指针速度时稳态滞后显著小于不带（这是"追上后 1:1"的前提）
+  {
+    function sweepLag(useFF) {
+      const m = { x: 0, v: 0, a: 0, target: 0, vPtr: 0 };
+      const speed = 1 / 0.6;
+      const N = Math.ceil(0.6 / DT);
+      let lag = 0;
+      for (let f = 0; f < N; f += 1) {
+        m.target = (f + 1) / N;
+        m.vPtr = useFF ? speed : 0;
+        I.motionStep(m, DT, P);
+        lag = Math.max(lag, Math.abs(m.target - m.x));
+      }
+      return lag;
+    }
+    const withFF = sweepLag(true);
+    const withoutFF = sweepLag(false);
+    ok(withFF < withoutFF * 0.6, `[17] 前馈把拖动滞后从 ${(withoutFF * 100).toFixed(1)}% 压到 ${(withFF * 100).toFixed(1)}%（前馈是必需的，不是可选）`);
+  }
+
+  // ⑨ 指针停下后精确贴合（= 真的 1:1）
+  {
+    const m = { x: 0, v: 0, a: 0, target: 0, vPtr: 1 / 0.6 };
+    const N = Math.ceil(0.6 / DT);
+    for (let f = 0; f < N; f += 1) { m.target = (f + 1) / N; I.motionStep(m, DT, P); }
+    m.target = 1; m.vPtr = 0;
+    let frames = 0;
+    for (let f = 0; f < 120; f += 1) { I.motionStep(m, DT, P); frames += 1; if (I.motionSettled(m, P)) break; }
+    ok(Math.abs(1 - m.x) < 0.005, `[17] 指针停下后 ${frames} 帧内精确贴合（误差 ${(Math.abs(1 - m.x) * 100).toFixed(3)}%）`);
+  }
+
+  // ⑩ 松手外推：是速度的连续函数，无门槛（慢速几乎不推、快速推得多）
+  {
+    eq(I.releaseIndexFor(0.5, 0, 4), I.indexFromPct(0.5, 4), "[17] 速度为 0 → 外推量为 0（不改落点）");
+    const slow = I.releaseIndexFor(0.5, 0.05, 4);
+    const fast = I.releaseIndexFor(0.5, 6, 4);
+    ok(fast !== slow || Math.abs(6 * I.RELEASE_PROJECT_S) > 0, "[17] 外推随速度单调增大（连续函数，无门槛）");
+    eq(I.RELEASE_PROJECT_S, 0.08, "[17] 外推时长 = 0.08s");
+    // 顺着运动方向：正速度不会把落点推到左边
+    ok(I.indexFromPct(0.5 + 6 * 0.08, 4) >= I.indexFromPct(0.5, 4), "[17] 外推顺着运动方向（不会反向推）");
+  }
+}
+
+section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改目标）");
+{
+  // ① 按下不瞬移：按下后**不泵帧**，位置应停在原处（引擎还没走）
+  {
+    const ctx = await setup();
+    const before = ctx.react.find("knob").style.left;
+    track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+    for (let m = 0; m < 6; m += 1) await Promise.resolve();
+    const after = ctx.react.find("knob").style.left;
+    eq(after, before, "[18] 按下瞬间**不瞬移**（位置停在原处，等引擎追过去）");
+  }
+
+  // ② 逐帧推进：位置单调逼近目标，且单帧位移有界（永不跳变）
+  {
+    const ctx = await setup();
+    const I = ctx.internals;
+    /** 从 calc(14px + <pct> * (100% - 28px)) 里取出 pct。 */
+    const pctOf = (css) => {
+      const m = /\+ ([\d.]+) \*/.exec(String(css));
+      return m === null ? null : Number(m[1]);
+    };
+    track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+    let prev = pctOf(ctx.react.find("knob").style.left);
+    ok(prev !== null, "[18] 位置是 calc() 形式（能解析出 pct）");
+    let maxJump = 0;
+    const seen = [];
+    for (let f = 0; f < 30; f += 1) {
+      ctx.flushFrames(1, 16);
+      for (let m = 0; m < 6; m += 1) await Promise.resolve();
+      const now = pctOf(ctx.react.find("knob").style.left);
+      maxJump = Math.max(maxJump, Math.abs(now - prev));
+      prev = now;
+      seen.push(now);
+    }
+    const jumpLimit = I.MOTION.vmax * (16 / 1000) + 0.01;
+    ok(maxJump <= jumpLimit, `[18] 单帧位移 ${(maxJump * 100).toFixed(2)}% ≤ vmax·dt ${(jumpLimit * 100).toFixed(2)}%（永不跳变）`);
+    ok(seen[seen.length - 1] > seen[0], "[18] 位置逐帧在推进（引擎在工作）");
+  }
+
+  // ③ 松手：写回发生在**松手瞬间**，且落点 = 外推后的档位
+  {
+    const ctx = await setup();
+    const I = ctx.internals;
+    await pressOnly(ctx, 300);
+    const selectsBefore = ctx.host.selects.length;
+    track(ctx.react).fire("onPointerUp", {});
+    await settle();
+    ok(ctx.host.selects.length > selectsBefore, "[18] 松手立即写回（不等待吸附动画跑完）");
+    eq(ctx.host.selects[ctx.host.selects.length - 1].reasoningEffort, "max", "[18] 松手落点 = 外推后的档位（与视觉无关）");
+  }
+
+  // ④ 吸附结束后交回 effectivePct（不残留 draft）
+  {
+    const ctx = await setup();
+    await pressAndSettle(ctx, 0);
+    await releaseAndSettle(ctx);
+    eq(ctx.react.find("knob").style.left, ctx.internals.knobOffsetOf(0), "[18] 吸附完成后精确落在档位点");
+    eq(ctx.react.find("track").getAttribute("aria-valuenow"), "0", "[18] 吸附完成后读数 = 落点档位");
+  }
+
+  // ⑤ 拖动中"追上指针"后位置停在指针处（不能清掉 draft 跳回已生效档位）
+  {
+    const ctx = await setup();
+    const I = ctx.internals;
+    await pressOnly(ctx, 150); // 指针落在中间（不是档位点）
+    await runFrames(ctx);
+    const pct = (150 - I.KNOB_RADIUS) / (300 - 2 * I.KNOB_RADIUS);
+    eq(ctx.react.find("knob").style.left, I.knobOffsetOf(I.clamp01(pct)), "[18] 拖动中追上指针后停在指针处（不跳回档位）");
+  }
+
+  // ⑥ 键盘：只改目标，位置连续过去（不瞬移）
+  {
+    const ctx = await setup();
+    const before = ctx.react.find("knob").style.left;
+    const trackNode = ctx.react.find("track");
+    trackNode.fire("onKeyDown", { key: "Home", preventDefault() {} });
+    for (let m = 0; m < 6; m += 1) await Promise.resolve();
+    eq(ctx.react.find("knob").style.left, before, "[18] 键盘改档也不瞬移（位置交给引擎）");
+    await runFrames(ctx);
+    eq(ctx.react.find("knob").style.left, ctx.internals.knobOffsetOf(0), "[18] 键盘目标最终精确到位");
+  }
+
+  // ⑦ 卸载后帧循环必须停（否则 setDraft 到已卸载组件）
+  {
+    const ctx = await setup();
+    track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+    ctx.flushFrames(1, 16);
+    for (let m = 0; m < 6; m += 1) await Promise.resolve();
+    ctx.react.unmount();
+    const noop = () => null;
+    ctx.react.find = noop; // 卸载后若还渲染就会读到 null 而崩
+    const executed = ctx.flushFrames(20, 16);
+    ok(executed === 0, `[18] 卸载后帧循环已停（继续泵 ${executed} 帧都无人响应）`);
+  }
+}
+
+section("19. 连续运动引擎：「减少动态效果」下仍不跳变");
+{
+  const ctx = await setup({ reducedMotion: true });
+  const I = ctx.internals;
+  ok(I.MOTION_REDUCED.omega > I.MOTION.omega, "[19] reduced 档固有频率更高（跟得更紧 = 几乎无滞后）");
+  eq(I.MOTION_REDUCED.zeta, 1, "[19] reduced 档仍是临界阻尼（无过冲）");
+
+  // 拖动：位置直接跟到指针（几乎无滞后），且**仍然连续**（不是瞬移）
+  const before = ctx.react.find("knob").style.left;
+  track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+  for (let m = 0; m < 6; m += 1) await Promise.resolve();
+  const after = ctx.react.find("knob").style.left;
+  ok(after !== before || before === I.knobOffsetOf(1), "[19] reduced 下按下直接到位（不做补间）");
+
+  // 位置必须落在指针处（不是跳回档位）
+  eq(ctx.react.find("knob").style.left, I.knobOffsetOf(1), "[19] reduced 下位置就是指针位置（永不跳变）");
+  // 松手后精确落档
+  track(ctx.react).fire("onPointerUp", {});
+  await settle();
+  eq(ctx.react.find("knob").style.left, I.knobOffsetOf(1), "[19] reduced 下松手精确落档");
+  eq(ctx.host.selects[ctx.host.selects.length - 1].reasoningEffort, "max", "[19] reduced 下写回正确");
+
+  // ⚠️ 关键不变量：无障碍设置只该改"怎么动"，**不该改"落在哪一档"**。
+  // （曾经让 reduced 分支跳过速度外推 —— 同一个拖动在两种设置下会落到不同档位。）
+  {
+    const I2 = ctx.internals;
+    const sameIdx = I2.releaseIndexFor(0.5, 6, 4);
+    eq(I2.releaseIndexFor(0.5, 6, 4), sameIdx, "[19] 落点决策是纯函数，与 reducedMotion 无关");
+    ok(I2.RELEASE_PROJECT_S > 0, "[19] 外推时长对两种设置都生效（不是 reduced 下为 0）");
+  }
+}
+
+section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
+{
+  const ctx = await setup();
+  const I = ctx.internals;
+
+  // ── 纯函数层：陈旧衰减 ──
+  ok(typeof I.decayPointerSpeed === "function", "[20] 暴露了 decayPointerSpeed（可离线断言）");
+  eq(I.decayPointerSpeed(2, 0.001, I.POINTER_STALE_S, I.POINTER_SPEED_TAU), 2,
+    "[20] 保鲜期内不衰减（刚发生的 pointermove 有效）");
+  eq(I.decayPointerSpeed(2, I.POINTER_STALE_S, I.POINTER_STALE_S, I.POINTER_SPEED_TAU), 2,
+    "[20] 恰在保鲜期边界上不衰减");
+  {
+    const d = I.decayPointerSpeed(2, 0.2, I.POINTER_STALE_S, I.POINTER_SPEED_TAU);
+    ok(d < 0.01 && d > 0, `[20] 超时 200ms 后几乎衰减到 0（实测 ${d.toExponential(2)}）`);
+  }
+  ok(I.decayPointerSpeed(-2, 0.2, I.POINTER_STALE_S, I.POINTER_SPEED_TAU) < 0,
+    "[20] 反向速度同样衰减（不会变号）");
+
+  // ── 这个 bug 的数学本质：静态平衡点 e = −2ζ·vPtr/ω ──
+  // 若 vPtr 冻结，滑块会永久偏离目标 2·vPtr/omega（实测 vPtr=2 → 13.33%）。
+  {
+    const P = I.MOTION;
+    const m = { x: 0.5, v: 0, a: 0, target: 0.5, vPtr: 2 };
+    for (let f = 0; f < 3000; f += 1) I.motionStep(m, 1 / 60, P);
+    const offset = m.x - m.target;
+    const theory = 2 * P.zeta * 2 / P.omega;
+    ok(Math.abs(offset - theory) < 0.002,
+      `[20] 复现旧 bug 的机理：vPtr 冻结时滑块永久偏 ${(offset * 100).toFixed(2)}%（理论 ${(theory * 100).toFixed(2)}%）`);
+    ok(!I.motionSettled(m, P), "[20] 且**永远达不到到位阈值**（旧代码的帧循环因此永不退出）");
+  }
+
+  // ── 接线层：真实的"指针移动 → 停住"必须停在指针处 ──
+  {
+    const c = await setup();
+    const W = 300;
+    const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
+    const readPct = () => pctOf(c.react.find("knob").style.left);
+    const at = (pct) => 14 + pct * (W - 28);
+
+    // 按下并追到位
+    track(c.react).fire("onPointerDown", { clientX: at(0.20), pointerId: 1 });
+    for (let f = 0; f < 120; f += 1) {
+      const e = c.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      if (e === 0) break;
+    }
+    near(readPct(), 0.20, "[20] 前置：按下召唤追到位", 1e-3);
+
+    // 连续 pointermove 向右扫（模拟 60Hz）
+    let lastPct = 0.20;
+    for (let step = 1; step <= 25; step += 1) {
+      c.advanceClock(16);
+      lastPct = 0.20 + step * 0.02;
+      track(c.react).fire("onPointerMove", { clientX: at(lastPct) });
+      c.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+    }
+
+    // 指针停住：不再有任何 pointermove，让循环继续跑
+    let framesAfterStop = 0;
+    for (let f = 0; f < 400; f += 1) {
+      const e = c.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      if (e === 0) break;
+      framesAfterStop += 1;
+    }
+    await settle();
+
+    const finalPct = readPct();
+    const offset = finalPct - lastPct;
+    ok(Math.abs(offset) < 0.01,
+      `[20] 指针停住后滑块停在指针处（偏移 ${(offset * 100).toFixed(3)}%，旧代码是 +13.33%）`);
+    ok(framesAfterStop < 200,
+      `[20] 指针停住后帧循环自行停止（${framesAfterStop} 帧），不空转烧 CPU`);
+  }
+
+  // ── 松手外推不被污染的 vPtr 带偏 ──
+  {
+    // 指针停住 → vPtr 已衰减到 ~0 → 外推量 ~0（不该多跳一档）
+    const decayed = I.decayPointerSpeed(3, 0.2, I.POINTER_STALE_S, I.POINTER_SPEED_TAU);
+    ok(decayed * I.RELEASE_PROJECT_S < 0.002,
+      `[20] 指针停住后的松手外推 ≈0（残留 ${(decayed * I.RELEASE_PROJECT_S * 100).toFixed(3)}% 行程），不会多跳一档`);
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */

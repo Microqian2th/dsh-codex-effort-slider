@@ -1,28 +1,18 @@
-# dsh-codex-effort-slider
+# better-dsh-codex-effort-slider
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）用的 **Codex 风格推理等级滑条**。
 
 **一档一色、越往右越"通电"**：填充从蓝渐变到紫罗兰，高档位亮起紫色星云与星尘粒子，
 连官方那一行的数值文字也跟着变色（`Off` 档保持官方灰）。
 
-## 装好之后长这样（真机截图）
+![三档效果：Low / High / Max（深色主题）](preview/value-color-dark.png)
 
-收起态：档位就在输入框里那枚模型席按钮上，**点开之前**也按档位着色。
+| 收起态的模型席按钮也跟着变色 | 星尘分布（真产物算出来的） |
+|---|---|
+| ![模型席按钮](preview/seat-color.png) | ![星尘分布](preview/distribution.png) |
 
-![收起态：输入框里的档位显示](preview/screenshots/shot-01.png)
-
-点开模型菜单后（左列浅色主题 / 右列深色主题，四档从上到下）：
-
-| 档位 | 浅色主题 | 深色主题 |
-|---|---|---|
-| **Max** | ![浅色 Max](preview/screenshots/shot-02.png) | ![深色 Max](preview/screenshots/shot-06.png) |
-| **High** | ![浅色 High](preview/screenshots/shot-03.png) | ![深色 High](preview/screenshots/shot-07.png) |
-| **Low** | ![浅色 Low](preview/screenshots/shot-04.png) | ![深色 Low](preview/screenshots/shot-08.png) |
-| **Off** | ![浅色 Off](preview/screenshots/shot-05.png) | ![深色 Off](preview/screenshots/shot-09.png) |
-
-对比度都算过（最高档的数值文字：白底 **4.23:1**、深色底 **4.02:1**）。
-**不用安装也能先玩**：浏览器打开 [`preview/panel.html`](preview/panel.html)，可拖动、切浅深色、切 4/2/6 档模型
-（另有脚本生成的实现示意图：[`preview/seat-color.png`](preview/seat-color.png)、[`preview/distribution.png`](preview/distribution.png)）。
+浅色主题同样可读（对比度都算过：白底 4.23:1、深色底 4.02:1）：见 [`preview/value-color-light.png`](preview/value-color-light.png)。
+**不用安装也能先玩**：浏览器打开 [`preview/panel.html`](preview/panel.html)，可拖动、切浅深色、切 4/2/6 档模型。
 
 它不新增入口：**直接改造官方模型菜单里的「推理等级」那一行** ——
 那一行被加高上下内距、允许折行，滑条作为第二行铺满整行宽度；拖到最高档时整条轨道亮起紫色能量层。
@@ -43,14 +33,22 @@
 **30 秒上手**：下载/克隆本仓库 → 双击 `install.cmd`（或按下面的「安装」一节）→
 **完全退出并重开** DSH Desktop。
 
+> [!IMPORTANT]
+> **本仓库是上游 [dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider) 的修改分支（1.1.0）。**
+> 相对上游的改动集中在三处：滑条观感对齐 GPT 客户端（球比轨道大、球是真圆、Max 档隐藏其他定位点）；
+> 拖动改成一档一格 + 快慢两档动画（拖得慢，动画也慢）；写回宿主改成停顿去抖（修连续拖动发卡）。
+> 另：本分支**去掉了滑条的键盘操作** —— 不接管方向键、不进 tab 序，官方菜单的键盘导航保持原样。
+> 完整清单见 [MODIFICATIONS.md](MODIFICATIONS.md)（改了什么、为什么改、怎么验证、有哪些取舍）。
+
 ## 安装
 
-> 不想 clone 的话,直接下载打包好的 zip:[**Releases → dsh-codex-effort-slider-1.0.0.zip**](https://github.com/Microqian2th/dsh-codex-effort-slider/releases/latest)。
+> 不想 clone 的话，直接下载本仓库 Releases 里打包好的 zip（文件名 `better-dsh-codex-effort-slider-<version>.zip`，
+> 由仓库根目录的 `npm run pack` 生成）。
 
 **只走 DSH Desktop 自己的插件面板**——命令行装不了 `desktop` profile：
 
 ```powershell
-dsh plugin --profile desktop add link:"F:\Work Space\DeepSeek Harness\dsh-codex-effort-slider"
+dsh plugin --profile desktop add link:"F:\Work Space\DeepSeek Harness\better-dsh-codex-effort-slider"
 # error: profile "desktop" is managed exclusively by the Electron application
 ```
 
@@ -80,7 +78,7 @@ CSS 与拖动数学都是从真产物抽出来的）。
 npm run pack      # = powershell -NoProfile -ExecutionPolicy Bypass -File pack-dist.ps1
 ```
 
-产出 `dist/dsh-codex-effort-slider-<version>.zip`（约 350 KB）。本插件**零运行时依赖、无构建步骤** ——
+产出 `dist/better-dsh-codex-effort-slider-<version>.zip`（约 350 KB）。本插件**零运行时依赖、无构建步骤** ——
 解开就能装，接收方不需要 `pnpm install`。若要让人从 GitHub / npm 装，把**本目录的内容**推到仓库根
 （`package.json` 必须在仓库根，pnpm 才能把它当包解析）。
 

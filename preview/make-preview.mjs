@@ -7,7 +7,7 @@
  *
  * 防漂移的两条硬措施（否则预览页会慢慢变成一张骗人的图）：
  *   1. CSS 直接从 `lib/client.js` 里**抽出来**，不是复制一份；
- *   2. 拖动数学（indexFromPct / pctFromIndex / energyFor / 粒子参数）也是从产物里
+ *   2. 拖动数学（pctFromIndex / energyFor / 粒子参数）也是从产物里
  *      **抽函数体**内联进页面 —— 抽取失败就抛错，绝不悄悄生成一个数学不一样的预览。
  *
  * 明确它不是什么：静态复刻，不接宿主、不发生任何档位写回。
@@ -93,7 +93,6 @@ function extractConstants(text, names) {
 const fns = [
   "clamp01",
   "pctFromIndex",
-  "indexFromPct",
   "mixColor",
   "rgbOf",
   "fillColorFor",
@@ -117,6 +116,12 @@ const constantNames = [
   "TRACK_HEIGHT",
   "KNOB_SIZE",
   "KNOB_RADIUS",
+  "TRACK_RADIUS",
+  "DETENT_THIRD",
+  "SLIDE_EASE",
+  "SLIDE_EASE_SLOW",
+  "SLOW_DRAG_ENTER_MS",
+  "SLOW_DRAG_EXIT_MS",
   "BASE_SPEEDUP",
   "STARFIELD_DURATION_MEAN",
   "STARFIELD_DURATION_SPREAD",
@@ -133,8 +138,12 @@ const constantNames = [
 ];
 const { values: constants, source: constantsSource } = extractConstants(source, constantNames);
 const css = extractCss(source, constantsSource);
-if (constants.KNOB_SIZE !== constants.TRACK_HEIGHT) {
-  throw new Error("产物里旋钮直径 ≠ 轨道高度（用户要求「与滑条同宽」）");
+// 观感基线：**球要比轨道大**（对齐 GPT 客户端：球浮在轨道之上，并压过轨道两端）。
+if (!(constants.KNOB_SIZE > constants.TRACK_HEIGHT)) {
+  throw new Error("产物里球直径 ≤ 轨道高度（应当球比轨道大）");
+}
+if (constants.TRACK_RADIUS * 2 !== constants.TRACK_HEIGHT) {
+  throw new Error("产物里轨道端头半径 ≠ 轨道高度的一半");
 }
 if (!css.includes(".ces-energy") || !css.includes(".ces-star__dot")) {
   throw new Error("抽出来的 CSS 里没有能量层/星空规则（产物结构变了）");
@@ -164,7 +173,7 @@ const html = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>dsh-codex-effort-slider — 观感预览（官方菜单那一行）</title>
+<title>better-dsh-codex-effort-slider — 观感预览（官方菜单那一行）</title>
 <style>
 /* ── 预览页自带的最小主题令牌（取自 DSH 官方 ui-theme 的真实取值）──
    真插件在 DSH 里直接用官方令牌，这里只是为了在浏览器里还原同一套观感。 */
@@ -242,6 +251,10 @@ var ROW_PADDING_BLOCK = ${JSON.stringify(constants.ROW_PADDING_BLOCK)};
 var TRACK_HEIGHT = ${JSON.stringify(constants.TRACK_HEIGHT)};
 var KNOB_SIZE = ${JSON.stringify(constants.KNOB_SIZE)};
 var KNOB_RADIUS = ${JSON.stringify(constants.KNOB_RADIUS)};
+var TRACK_RADIUS = ${JSON.stringify(constants.TRACK_RADIUS)};
+var DETENT_THIRD = ${JSON.stringify(constants.DETENT_THIRD)};
+var SLOW_DRAG_ENTER_MS = ${JSON.stringify(constants.SLOW_DRAG_ENTER_MS)};
+var SLOW_DRAG_EXIT_MS = ${JSON.stringify(constants.SLOW_DRAG_EXIT_MS)};
 var BASE_SPEEDUP = ${JSON.stringify(constants.BASE_SPEEDUP)};
 var STARFIELD_DURATION_MEAN = ${JSON.stringify(constants.STARFIELD_DURATION_MEAN)};
 var STARFIELD_DURATION_SPREAD = ${JSON.stringify(constants.STARFIELD_DURATION_SPREAD)};
@@ -276,13 +289,14 @@ row.style.paddingBottom = ROW_PADDING_BLOCK;
 
 var host = document.createElement("div");
 host.className = "ces-inline";
+host.dataset.slide = "fast"; // 真插件每次渲染都会写 data-slide，这里保持一致
 host.setAttribute("data-energy", "0");
 row.appendChild(host);
 
 var track = document.createElement("div");
 track.className = "ces-track";
 track.setAttribute("role", "slider");
-track.setAttribute("tabindex", "0");
+// 真插件刻意不做键盘操作（不 tabindex、不挂 keydown）；预览页保持一致。
 var fill = document.createElement("div");
 fill.className = "ces-fill";
 var energy = document.createElement("div");
@@ -357,6 +371,7 @@ function renderTicks() {
     tick.className = "ces-tick";
     tick.style.left = knobOffsetOf(pctFromIndex(i, levels.length));
     tick.dataset.on = i <= index ? "1" : "0";
+    tick.dataset.current = i === index ? "1" : "0";
     ticks.appendChild(tick);
   });
 }
@@ -373,6 +388,8 @@ function render(pct) {
   knob.style.left = offset;
   host.style.setProperty("--ces-energy", String(strength));
   host.dataset.energy = strength > 0 ? "1" : "0";
+  // Max 档（最高一档）：隐藏其他档位的定位点（与 lib/client.js 的 data-max 规则一致）
+  host.dataset.max = index >= levels.length - 1 ? "1" : "0";
   row.style.boxShadow = strength > 0 ? "inset 0 0 0 1px rgba(168,85,247," + (0.16 + 0.34 * strength).toFixed(2) + ")" : "";
   valueSpan.textContent = shown.name;
   // 官方菜单里那一行的数值文字：跟着**显示中**的位置/档位着色（Off 档 = 空串 = 官方灰）
@@ -389,39 +406,81 @@ function render(pct) {
 
 function pctAt(clientX) {
   var rect = track.getBoundingClientRect();
-  var usable = rect.width - KNOB_RADIUS * 2;
+  var usable = rect.width - TRACK_RADIUS * 2;
   if (!(usable > 0)) return null;
-  return clamp01((clientX - rect.left - KNOB_RADIUS) / usable);
+  return clamp01((clientX - rect.left - TRACK_RADIUS) / usable);
 }
 
-function onMove(clientX) {
+/*
+ * 拖动手感与真插件一致：旋钮**不跟手**，指针越过"每档 +1/3 档距"的判定线才换档，
+ * 位置变化交给 CSS 过渡滑过去（真插件里由 React 重渲染 + transition 完成，这里同构）。
+ */
+var press = { u: 0, index: 0, conflict: false, active: false };
+
+function unitAt(clientX) {
   var pct = pctAt(clientX);
-  if (pct === null) return;
-  index = indexFromPct(pct, LEVELS[current].length);
-  render(pct);
+  if (pct === null) return null;
+  return pct * (LEVELS[current].length - 1);
+}
+
+function mappingOf(u) {
+  var last = LEVELS[current].length - 1;
+  return Math.max(0, Math.min(last, Math.floor(u - DETENT_THIRD) + 1));
+}
+
+function resolveTarget(u) {
+  var mapped = mappingOf(u);
+  if (press.active) {
+    if (!press.conflict || mapped === press.index || Math.abs(u - press.u) >= DETENT_THIRD) press.active = false;
+    else return press.index;
+  }
+  return mapped;
+}
+
+var lastStepAt = 0;
+var slideSlow = false;
+
+/**
+ * 快慢两档动画（与 lib/client.js 同一套判据）：与上一次换档的间隔决定用哪一档，
+ * 两个阈值构成迟滞。只改 host 上的 data-slide，CSS 那边靠 --ces-slide 变量接管。
+ */
+function noteStepTiming() {
+  var now = Date.now();
+  var gap = now - lastStepAt;
+  lastStepAt = now;
+  if (slideSlow) slideSlow = gap >= SLOW_DRAG_EXIT_MS;
+  else slideSlow = gap > SLOW_DRAG_ENTER_MS;
+  host.dataset.slide = slideSlow ? "slow" : "fast";
+}
+
+function setIndex(next) {
+  var levels = LEVELS[current];
+  var clamped = Math.max(0, Math.min(levels.length - 1, next));
+  if (clamped === index) return;
+  index = clamped;
+  noteStepTiming();
+  render();
 }
 
 track.addEventListener("pointerdown", function (event) {
   dragging = true;
-  track.setPointerCapture(event.pointerId);
-  onMove(event.clientX);
+  try { track.setPointerCapture(event.pointerId); } catch (error) { /* 合成事件没有真指针 */ }
+  var u = unitAt(event.clientX);
+  if (u === null) return;
+  var nearest = Math.round(u);
+  lastStepAt = Date.now();   // 第一次换档的间隔从"按下"算起
+  press = { u: u, index: nearest, conflict: mappingOf(u) !== nearest, active: true };
+  setIndex(nearest);   // 按下 = 点哪去哪（取最近档）
 });
-track.addEventListener("pointermove", function (event) { if (dragging) onMove(event.clientX); });
-function end() { if (!dragging) return; dragging = false; render(); }
+track.addEventListener("pointermove", function (event) {
+  if (!dragging) return;
+  var u = unitAt(event.clientX);
+  if (u === null) return;
+  setIndex(resolveTarget(u));
+});
+function end() { if (!dragging) return; dragging = false; press.active = false; render(); }
 track.addEventListener("pointerup", end);
 track.addEventListener("pointercancel", end);
-track.addEventListener("keydown", function (event) {
-  var levels = LEVELS[current];
-  var next = null;
-  if (event.key === "ArrowLeft" || event.key === "ArrowDown") next = Math.max(0, index - 1);
-  else if (event.key === "ArrowRight" || event.key === "ArrowUp") next = Math.min(levels.length - 1, index + 1);
-  else if (event.key === "Home") next = 0;
-  else if (event.key === "End") next = levels.length - 1;
-  else return;
-  event.preventDefault();
-  index = next;
-  render();
-});
 
 function setLevels(key) {
   current = key;

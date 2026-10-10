@@ -1,6 +1,6 @@
 {
-  "name": "dsh-codex-effort-slider",
-  "version": "1.0.0",
+  "name": "better-dsh-codex-effort-slider",
+  "version": "1.1.0",
   "private": true,
   "description": "Codex 风格的推理等级滑条：把 DSH 输入框工具行的推理等级档位换成一条可拖动的连续滑条 / A Codex-style reasoning-effort slider for DeepSeek Harness",
   "license": "MIT",
@@ -25,6 +25,9 @@
     "cordis.patch.yml",
     "install-profile.ps1",
     "install.cmd",
+    "pack-dist.ps1",
+    "CHANGELOG.md",
+    "MODIFICATIONS.md",
     "LICENSE",
     "test",
     "preview",

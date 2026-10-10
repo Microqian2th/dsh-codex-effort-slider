@@ -1,12 +1,13 @@
 /**
- * dsh-codex-effort-slider — 客户端离线测试
+ * better-dsh-codex-effort-slider — 客户端离线测试
  *
  * 跑法：`node test/client.test.mjs`
  *
  * 这一版测的是**新架构**：滑条不再挂在输入框工具行，而是由 DOM 桥注入到
  * 官方模型菜单的「推理等级」那一行内部（那一行同时被加高）。所有断言里最要紧的几条：
  *   · 只动那一行（官方原有的 label/value/chevron 一个不动），关菜单后**逐个还原**
- *   · 拖动真的写回官方档位；不把宿主打爆（去重 + 在途合并 + 降频）
+ *   · 拖动真的写回官方档位；不把宿主打爆（去重 + 在途合并 + **停顿去抖**：
+ *     连续拖动期间一次都不写回，停手/松手才落地）
  *   · 找不到锚点/不是自己的会话就**什么都不做**（fail-open，官方菜单绝不受影响）
  *   · 结构上不存在消息注入这条路
  */
@@ -97,16 +98,16 @@ function cssValue(node, prop) {
 section("1. 接线与产物");
 {
   const { registration, plugin, entry, document, host, internals } = await setup();
-  eq(registration.id, "dsh-codex-effort-slider", "[1] bundle 注册 id 正确");
+  eq(registration.id, "better-dsh-codex-effort-slider", "[1] bundle 注册 id 正确");
   ok(Array.isArray(plugin.inject) && plugin.inject.indexOf("slots") >= 0, "[1] inject 含 slots");
   ok(plugin.inject.indexOf("modelDirectories") >= 0, "[1] inject 含 modelDirectories（读写官方档位靠它）");
   ok(plugin.inject.indexOf("sessions") >= 0, "[1] inject 含 sessions（判子代理会话靠它）");
   eq(entry.opts.name, "conversation.input.right", "[1] 仍然注册插槽条目（不可见锚点：拿 sessionId + ctx 的立足点）");
-  eq(entry.opts.id, "codex-effort-slider", "[1] 条目 id 是自己的");
-  const styles = document.querySelectorAll('style[data-plugin-css="dsh-codex-effort-slider"]');
+  eq(entry.opts.id, "codex-effort-slider", "[1] 条目 id 沿用上游（写进 cordis.patch.yml 的 include 锚点，故意不改名）");
+  const styles = document.querySelectorAll('style[data-plugin-css="better-dsh-codex-effort-slider"]');
   eq(styles.length, 1, "[1] 样式挂载一次");
   internals.installStyles();
-  eq(document.querySelectorAll('style[data-plugin-css="dsh-codex-effort-slider"]').length, 1, "[1] 重复安装样式是幂等的");
+  eq(document.querySelectorAll('style[data-plugin-css="better-dsh-codex-effort-slider"]').length, 1, "[1] 重复安装样式是幂等的");
   eq(host.subscriptions.length, 0, "[1] apply 期间没有订阅任何宿主事件");
   ok(internals.CSS.indexOf(".ces-track") > 0, "[1] 样式里有轨道规则");
 }
@@ -147,32 +148,162 @@ section("2. 只动那一行：加高、折行、不碰官方原有内容");
 section("2b. 顶头适配：旋钮与滑条同高，且两端都不越界");
 {
   const { react, internals, host } = await setup();
-  eq(internals.KNOB_SIZE, internals.TRACK_HEIGHT, "[2b] 旋钮直径 = 轨道高度（「加大到与滑条同宽」）");
-  eq(internals.KNOB_RADIUS, internals.KNOB_SIZE / 2, "[2b] 半径 = 直径的一半");
-  eq(internals.knobOffsetOf(0), "calc(14px + 0 * (100% - 28px))", "[2b] pct=0 时圆心落在左端半径处");
-  eq(internals.knobOffsetOf(1), "calc(14px + 1 * (100% - 28px))", "[2b] pct=1 时圆心落在右端半径处");
+  // 对齐 GPT 客户端：**球比轨道大**，浮在轨道之上（客户端实测球 110px / 轨道 80px ≈ 1.375）
+  eq(internals.KNOB_RADIUS, internals.KNOB_SIZE / 2, "[2b] 球半径 = 直径的一半");
+  eq(internals.TRACK_RADIUS, internals.TRACK_HEIGHT / 2, "[2b] 轨道端头半径 = 轨道高度的一半");
+  ok(internals.KNOB_SIZE > internals.TRACK_HEIGHT, "[2b] 球比轨道大（球浮在轨道之上）");
+  near(internals.KNOB_SIZE / internals.TRACK_HEIGHT, 1.4, "[2b] 球直径/轨道高 ≈ 1.4（GPT 客户端实测 1.375）", 0.12);
+  ok(internals.KNOB_RADIUS > internals.TRACK_RADIUS, "[2b] 球半径 > 端头半径 → 球上下都压出轨道之外");
+  // 球心在两端各内缩一个**轨道端头**半径（不是球半径）：球因此压过轨道两端；
+  // 又因为球心正好落在填充层左端半圆的圆心上，那个半圆必然被球完整盖住（见 2c）。
+  eq(internals.knobOffsetOf(0), "calc(10px + 0 * (100% - 20px))", "[2b] pct=0 时球心落在轨道左端圆心");
+  eq(internals.knobOffsetOf(1), "calc(10px + 1 * (100% - 20px))", "[2b] pct=1 时球心落在轨道右端圆心");
   ok(internals.CSS.indexOf(".ces-knob{") > 0, "[2b] 有旋钮规则");
   const knobCss = internals.CSS.slice(internals.CSS.indexOf(".ces-knob{"), internals.CSS.indexOf("}", internals.CSS.indexOf(".ces-knob{")));
-  ok(knobCss.indexOf("border-radius:50%") > 0, "[2b] 旋钮是正圆（border-radius:50%）");
-  ok(knobCss.indexOf(`width:${internals.KNOB_SIZE}px;height:${internals.KNOB_SIZE}px`) > 0, "[2b] 旋钮盒子是等宽高的正方形（配合 50% 圆角才是圆）");
-  ok(knobCss.indexOf(`margin:${-internals.KNOB_RADIUS}px 0 0 ${-internals.KNOB_RADIUS}px`) > 0, "[2b] 用 margin 把圆心对准计算出的 left");
+  ok(knobCss.indexOf("border-radius:50%") > 0, "[2b] 球是正圆（border-radius:50%）");
+  ok(knobCss.indexOf(`width:${internals.KNOB_SIZE}px;height:${internals.KNOB_SIZE}px`) > 0, "[2b] 球的盒子是等宽高的正方形（配合 50% 圆角才是圆）");
+  ok(knobCss.indexOf(`margin:${-internals.KNOB_RADIUS}px 0 0 ${-internals.KNOB_RADIUS}px`) > 0, "[2b] 用 margin 把球心对准计算出的 left");
   const trackCss = internals.CSS.slice(internals.CSS.indexOf(".ces-track{"), internals.CSS.indexOf("}", internals.CSS.indexOf(".ces-track{")));
-  ok(trackCss.indexOf(`height:${internals.TRACK_HEIGHT}px`) > 0, "[2b] 轨道高度与旋钮直径用同一组常量");
+  ok(trackCss.indexOf(`height:${internals.TRACK_HEIGHT}px`) > 0, "[2b] 轨道高度走常量（常量若晚于样式表求值，轨道会塌成 0 高）");
 
   // 指针映射与视觉几何一致：拖到最左必定命中第一档（而不是因为内缩差一点点）
   const node = track(react, 0, 300);
   node.fire("onPointerDown", { clientX: 0, pointerId: 1 }); // 远在左端之外
   node.fire("onPointerUp", {});
   await settle();
-  eq(react.find("knob").style.left, internals.knobOffsetOf(0), "[2b] 拖到最左 → 旋钮贴左端圆角内（圆心不越界）");
+  eq(react.find("knob").style.left, internals.knobOffsetOf(0), "[2b] 拖到最左 → 球心落在轨道左端圆心（球压过端头）");
   eq(host.selects[host.selects.length - 1].reasoningEffort, "off", "[2b] 最左端映射到第一档");
 
   // 右端同理
   track(react, 0, 300).fire("onPointerDown", { clientX: 300, pointerId: 1 });
   track(react).fire("onPointerUp", {});
   await settle();
-  eq(react.find("knob").style.left, internals.knobOffsetOf(1), "[2b] 拖到最右 → 旋钮贴右端圆角内（不会被菜单裁掉）");
+  eq(react.find("knob").style.left, internals.knobOffsetOf(1), "[2b] 拖到最右 → 球心落在轨道右端圆心（不会被菜单裁掉）");
   eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[2b] 最右端映射到最高档");
+}
+
+section("2c. 填充层左端圆角与旋钮同心：off 档不再漏出蓝色月牙");
+{
+  const { internals } = await setup();
+
+  const start = internals.CSS.indexOf(".ces-fill{");
+  ok(start > 0, "[2c] 有填充规则");
+  const fillCss = internals.CSS.slice(start, internals.CSS.indexOf("}", start));
+  const cap = internals.TRACK_RADIUS; // 填充左端圆角 = 轨道端头半径
+  const ball = internals.KNOB_RADIUS; // 球半径（比端头大）
+  eq(cap * 2, internals.TRACK_HEIGHT, "[2c] 填充左端圆角 = 轨道高度的一半（与轨道端头同心等径）");
+  ok(fillCss.indexOf(`border-radius:${cap}px 0 0 ${cap}px`) > 0, "[2c] 填充左端圆角 = 轨道端头半径，右端为直角");
+  ok(fillCss.indexOf("999px") < 0, "[2c] 填充不再使用会被窄盒子收缩的 999px 圆角");
+  ok(ball >= cap, "[2c] 球半径 ≥ 端头半径 → 同心时左端半圆必被球盖住");
+  ok(ball * 2 >= internals.TRACK_HEIGHT, "[2c] 球直径 ≥ 轨道高度 → 填充的直角右边永远藏在球下");
+
+  /** 圆角矩形内部判定（采样用）：每个角按其半径做「到角心距离 ≤ 半径」；半径 0 的角按直角。 */
+  const insideRoundedRect = (x, y, w, h, tl, tr, br, bl) => {
+    const corners = [
+      { cx: tl, cy: tl, r: tl, left: true, top: true },
+      { cx: w - tr, cy: tr, r: tr, left: false, top: true },
+      { cx: w - br, cy: h - br, r: br, left: false, top: false },
+      { cx: bl, cy: h - bl, r: bl, left: true, top: false },
+    ];
+    for (const c of corners) {
+      if (c.r <= 0) continue;
+      const inCorner = (c.left ? x < c.cx : x > c.cx) && (c.top ? y < c.cy : y > c.cy);
+      if (inCorner) {
+        const dx = x - c.cx;
+        const dy = y - c.cy;
+        return dx * dx + dy * dy <= c.r * c.r + 1e-9;
+      }
+    }
+    return true;
+  };
+
+  /*
+   * off 档 pct=0 → 填充宽度 = knobOffsetOf(0) = 一个**端头**半径，盒子是 cap × TRACK_HEIGHT。
+   * 左端上下各占一个 cap，正好收成以 (cap, TRACK_HEIGHT/2) 为心的半圆；而这个点正是
+   * pct=0 时球心的位置（球心同样内缩一个端头半径）—— 两者同心，且球半径更大，
+   * 所以整块填充必然落在球内，不会从球旁边漏出颜色。
+   */
+  const h = internals.TRACK_HEIGHT;
+  const cx = cap;
+  const cy = h / 2;
+  const countOutsideBall = (fw, tl, tr, br, bl) => {
+    let outside = 0;
+    for (let x = 0; x <= fw; x += 0.25) {
+      for (let y = 0; y <= h; y += 0.25) {
+        if (!insideRoundedRect(x, y, fw, h, tl, tr, br, bl)) continue;
+        const dx = x - cx;
+        const dy = y - cy;
+        if (dx * dx + dy * dy > ball * ball + 1e-9) outside += 1;
+      }
+    }
+    return outside;
+  };
+
+  eq(countOutsideBall(cap, cap, 0, 0, cap), 0, "[2c] off 档填充轮廓 100% 落在球内（采样无一点在外 → 不漏色）");
+  // 反证：把宽度放大到整个球的直径（模拟"宽度算错"的回归），右端两角就会伸出球外 —— 采样抓得到。
+  ok(countOutsideBall(internals.KNOB_SIZE, cap, 0, 0, cap) > 0, "[2c] 反证：填充偏宽会伸出球外（本测试有牙齿）");
+}
+
+section("2d. Max 档不显示其他档位的定位点");
+{
+  const { react, internals } = await setup();
+  // 注：桩件每次渲染都会重建节点对象，所以每次断言都要重新 find（不能缓存句柄）。
+  ok(
+    internals.CSS.indexOf(".ces-inline[data-max='1'] .ces-tick[data-current='0']{opacity:0}") > 0,
+    "[2d] 有「Max 档隐藏非当前刻度」的规则",
+  );
+
+  // 非 Max（默认 high）：规则不该生效，4 个刻度照常显示
+  eq(react.find("root").getAttribute("data-max"), "0", "[2d] high 档不进入隐藏态");
+  eq(react.findAll("tick").length, 4, "[2d] 非 Max：4 个刻度都在");
+
+  // 拖到最右 → Max
+  track(react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+  await settle();
+  eq(react.find("root").getAttribute("data-max"), "1", "[2d] 拖到最右 → 进入 Max 态");
+
+  const ticks = react.findAll("tick");
+  eq(ticks.length, 4, "[2d] Max 态仍保留 4 个刻度节点（只改透明度，拖动时不增删 DOM）");
+  const current = ticks.filter((node) => node.getAttribute("data-current") === "1");
+  const others = ticks.filter((node) => node.getAttribute("data-current") === "0");
+  eq(current.length, 1, "[2d] 恰好一个刻度被标记为「当前」");
+  eq(others.length, 3, "[2d] 其余 3 个刻度标记为非当前 → 命中规则被隐藏");
+  eq(current[0].style.left, internals.knobOffsetOf(1), "[2d] 留下的是 Max 档自身（圆心贴右端，本就被旋钮盖住）");
+
+  // 拖回中间：必须退出 Max 态（规则不能粘住）
+  track(react).fire("onPointerMove", { clientX: 150, pointerId: 1 });
+  await settle();
+  eq(react.find("root").getAttribute("data-max"), "0", "[2d] 拖回中间 → 退出 Max 态，其他档位定位点恢复");
+  eq(react.findAll("tick").filter((node) => node.getAttribute("data-current") === "1").length, 1, "[2d] 任何时刻「当前」标记都只有一个");
+  track(react).fire("onPointerUp", {});
+  await settle();
+}
+
+section("2e. 所有圆角显式 opt-out 掉 DSH 的全局超椭圆");
+{
+  const { internals } = await setup();
+
+  /*
+   * DSH 主题（@deepseek-ai/dsh-client-ui-theme）全局做了：
+   *   @supports (corner-shape:superellipse(1.5)){
+   *     :root{--dsw-corner-shape:superellipse(1.5)}
+   *     *,:before,:after{corner-shape:var(--dsw-corner-shape)}
+   *   }
+   * 于是每个元素的 border-radius 都按**超椭圆**渲染：`border-radius:50%` 在真宿主里画出来
+   * 是"圆角矩形"而不是正圆（球看着像方块就是这个原因）。DSH 自己的 Switch 也是显式
+   * `corner-shape:round` 才拿到真正的胶囊+圆点，所以本插件每条带圆角的规则都必须写。
+   */
+  const rounded = ["ces-track", "ces-fill", "ces-tick", "ces-knob", "ces-energy", "ces-stars"];
+  for (const name of rounded) {
+    const start = internals.CSS.indexOf(`.${name}{`);
+    ok(start > 0, `[2e] 有 .${name} 规则`);
+    const rule = internals.CSS.slice(start, internals.CSS.indexOf("}", start));
+    ok(rule.indexOf("border-radius") > 0, `[2e] .${name} 声明了圆角`);
+    ok(
+      rule.indexOf("corner-shape:round") > 0,
+      `[2e] .${name} 显式 corner-shape:round —— 否则被 DSH 全局超椭圆渲染成圆角矩形`,
+    );
+  }
 }
 
 section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-open）");
@@ -263,8 +394,8 @@ section("5. 拖动真的写回官方档位");
 {
   const { menu, react, host } = await setup();
   track(react).fire("onPointerDown", { clientX: 60, pointerId: 1 }); // 60/300 = 20% → index 1 = low
-  await wait(180);
-  eq(host.selects.length, 1, "[5] 拖动中停留 → 档位在降频窗口到期后落地");
+  await wait(340);
+  eq(host.selects.length, 1, "[5] 拖动中停住 → 档位在停顿窗口到期后落地");
   eq(JSON.stringify(host.selects[0]), JSON.stringify({
     provider: "deepseek",
     model: "deepseek-v41-flash",
@@ -287,6 +418,38 @@ section("5. 拖动真的写回官方档位");
   eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[5] 拖到最右 = 最高档");
 }
 
+section("5b. 连续拖动期间一次都不写回宿主（去抖 = 卡顿的根治点）");
+{
+  /*
+   * 每次写回都会让 DSH 改这个会话的推理档位（落盘 + 重渲染）。原先按 120ms 节流，
+   * 连续拖动相当于每秒打宿主 8 次 —— 实测就是"拖动有点卡"。现在改成停顿去抖：
+   * 指针还在动就一直攒着，停住 COMMIT_SETTLE_MS 或松手才落地。
+   */
+  const { react, host } = await setup();
+  // ⚠️ 桩件每次渲染都会重建节点、rect 会退回默认值，所以**每次发事件前都要重新 track()**
+  //    来固定几何（其它拖动测试也是这么写的）。否则 clientX ↔ 档位的换算会中途变形。
+  track(react, 0, 300).fire("onPointerDown", { clientX: 30, pointerId: 1 });
+  // 往返扫两遍：档位一直在变，相邻两次换档的间隔都远小于停顿窗口 —— 这才是"连续拖动"。
+  // （只朝一个方向扫会很快顶到最高档，之后就只剩指针在动、档位不变；
+  //   那时去抖按设计就该落地一次，不能拿来当"每秒 8 次打宿主"的证据。）
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let i = 0; i <= 12; i += 1) {
+      const f = pass === 0 ? i / 12 : 1 - i / 12;
+      track(react, 0, 300).fire("onPointerMove", { clientX: 30 + 240 * f, pointerId: 1 });
+      await wait(16);
+    }
+  }
+  eq(host.selects.length, 0, "[5b] 连续拖动期间 0 次写回（不再每秒 8 次打宿主）");
+
+  await wait(400); // 停手超过去抖窗口
+  ok(host.selects.length >= 1, "[5b] 指针停住后仍然会落地（保住「停一下也生效」的行为）");
+
+  const beforeRelease = host.selects.length;
+  track(react, 0, 300).fire("onPointerUp", {});
+  await settle();
+  ok(host.selects.length <= beforeRelease + 1, "[5b] 松手最多再补一次（同档位去重）");
+}
+
 section("6. 拖动不会误触官方那一行的点击（会跳进等级列表）");
 {
   const { menu, react } = await setup();
@@ -302,26 +465,17 @@ section("6. 拖动不会误触官方那一行的点击（会跳进等级列表�
   ok(!drilled, "[6] 在滑条上拖动/点击不会触发官方那一行的 onClick");
   ok(stopped || true, "[6] 滑条自己吞掉了 click 事件（阻止冒泡）");
 
-  // 键盘也一样不能漏给官方菜单
-  let menuKey = false;
-  menu.effortRow.parentNode.handlers.onKeyDown = () => { menuKey = true; };
+  // 滑条刻意不做键盘操作（用户要求）：不装 onKeyDown、也不进 tab 序 ——
+  // 方向键因此原样留给官方菜单，不会再被我们吞掉。
   const track2 = track(react);
-  let propagated = false;
-  const fakeEvent = { key: "ArrowRight", preventDefault() {}, stopPropagation() { propagated = true; } };
-  track2.handlers.onKeyDown(fakeEvent);
-  await settle();
-  ok(propagated, "[6] 方向键被滑条 stopPropagation（不会同时移动官方菜单焦点）");
+  eq(track2.handlers.onKeyDown, undefined, "[6] 滑条不接管键盘（没有挂 onKeyDown）");
+  ok(!track2.getAttribute("tabindex"), "[6] 滑条不在 tab 序里（不抢官方菜单的焦点）");
+  eq(track2.getAttribute("role"), "slider", "[6] 但 role/aria 读数保留（读屏仍能念出当前档位）");
 }
 
-section("7. 键盘可达 + 去重/限频/在途合并");
+section("7. 去重/限频/在途合并");
 {
   const { react, host } = await setup();
-  track(react).fire("onKeyDown", { key: "ArrowRight" });
-  await settle();
-  eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[7] 右方向键上移一档并写回");
-  track(react).fire("onKeyDown", { key: "Home" });
-  await settle();
-  eq(host.selects[host.selects.length - 1].reasoningEffort, "off", "[7] Home 键回到最低档");
 
   // 7a 落在当前档位：一次写回都不该有
   const a = await setup();
@@ -465,7 +619,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(highDur / internals.starDurationFor(0, internals.speedFor(1)) > 1.7, "[10] 速度变化保留：high 比 MAX 慢近一倍");
 
   // 第二档（low，pct=1/3）：纯蓝、没有粒子、没有星云
-  track(react).fire("onPointerDown", { clientX: internals.KNOB_RADIUS + T * (300 - 2 * internals.KNOB_RADIUS), pointerId: 1 });
+  track(react).fire("onPointerDown", { clientX: internals.TRACK_RADIUS + T * (300 - 2 * internals.TRACK_RADIUS), pointerId: 1 });
   track(react).fire("onPointerUp", {});
   await settle();
   eq(react.find("root").getAttribute("data-energy"), "0", "[10] 第二档：能量层关闭");
@@ -583,7 +737,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(new Set(delays.map((d) => d.toFixed(2))).size > 10, "[10] 相位铺开（均匀分布在轨道上）");
 
   // ── 拖回 high：同一套星空动画，但**慢一倍**（速度变化保留）
-  track(react).fire("onPointerDown", { clientX: internals.KNOB_RADIUS + H * (300 - 2 * internals.KNOB_RADIUS), pointerId: 1 });
+  track(react).fire("onPointerDown", { clientX: internals.TRACK_RADIUS + H * (300 - 2 * internals.TRACK_RADIUS), pointerId: 1 });
   await settle();
   near(Number(react.find("root").style["--ces-energy"]), 0.5, "[10] 拖到 high：--ces-energy = 0.5");
   eq(react.findAll("particle").length, 11, "[10] 拖到 high：11 颗星星");
@@ -833,6 +987,142 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   ok(internals.CSS.indexOf(".ces-tick[data-on='1']{background:rgba(255,255,255,.5)}") > 0, "[16] 已达刻度 92% → 50% 白（更淡，不再和星星抢眼）");
   const tickNodes = off.react.findAll("tick");
   ok(tickNodes.length >= 4, `[16] 4 档就有 4 个刻度点（实测 ${tickNodes.length}）`);
+}
+
+section("17. 拖动手感：旋钮不跟手，越过 1/3 档距才切档，跨多档一段滑到位");
+{
+  const { internals } = await setup();
+  const R = internals.TRACK_RADIUS;
+  // 夹具轨道 300px 宽、left=0；4 档模型下 1 档距 = (300-2R)/3 px。
+  // "档位单位" u：0 = 最低档，1 = 第二档 …… 换算回 clientX 就是下面这个式子。
+  const xOf = (u) => R + (u / 3) * (300 - 2 * R);
+  const leftFor = (pct) => internals.knobOffsetOf(pct);
+
+  // 17a 按下 = 点哪去哪：落到**最近**那一档（不是 1/3 判定）
+  const a = await setup();
+  track(a.react).fire("onPointerDown", { clientX: xOf(1.4), pointerId: 1 });
+  await settle();
+  eq(a.react.find("knob").style.left, leftFor(1 / 3), "[17] 按下取最近档：u=1.4 → 第 2 档（不是第 3 档）");
+
+  // 17b 死区：按下点已经越过该档的 1/3 线（1.4 > 1+1/3），不能立刻再跳一档
+  track(a.react).fire("onPointerMove", { clientX: xOf(1.4), pointerId: 1 });
+  await settle();
+  eq(a.react.find("knob").style.left, leftFor(1 / 3), "[17] 指针原地不动 → 仍停第 2 档（死区挡住多跳）");
+  track(a.react).fire("onPointerMove", { clientX: xOf(1.6), pointerId: 1 });
+  await settle();
+  eq(a.react.find("knob").style.left, leftFor(1 / 3), "[17] 只离开按下点 0.2 档距 → 仍不切档");
+  track(a.react).fire("onPointerMove", { clientX: xOf(1.8), pointerId: 1 });
+  await settle();
+  eq(a.react.find("knob").style.left, leftFor(2 / 3), "[17] 离开按下点超过 1/3 档距 → 切到第 3 档");
+  track(a.react).fire("onPointerUp", {});
+  await settle();
+
+  // 17c 判定线是**同一条**（在每档 +1/3 档距处）：前进走 1/3 就切上去，后退要退回该线以下
+  const b = await setup();
+  track(b.react).fire("onPointerDown", { clientX: xOf(0), pointerId: 1 });
+  await settle();
+  track(b.react).fire("onPointerMove", { clientX: xOf(0.5), pointerId: 1 });
+  await settle();
+  eq(b.react.find("knob").style.left, leftFor(1 / 3), "[17] 前进越过 1/3 档距 → 切到第 2 档");
+  track(b.react).fire("onPointerMove", { clientX: xOf(0.8), pointerId: 1 });
+  await settle();
+  eq(b.react.find("knob").style.left, leftFor(1 / 3), "[17] 还没到下一道 1/3 线 → 停在第 2 档");
+  track(b.react).fire("onPointerMove", { clientX: xOf(0.6), pointerId: 1 });
+  await settle();
+  eq(b.react.find("knob").style.left, leftFor(1 / 3), "[17] 后退到 0.6 档距：仍在 1/3 线之上 → 不切回（同一条线，非对称）");
+  track(b.react).fire("onPointerMove", { clientX: xOf(0.3), pointerId: 1 });
+  await settle();
+  eq(b.react.find("knob").style.left, leftFor(0), "[17] 退到 1/3 线以下 → 切回第 1 档");
+  track(b.react).fire("onPointerUp", {});
+  await settle();
+
+  // 17d 跨多档：同一次事件直接给出最终档位 = 一段滑到位（不逐档连滑）
+  const c = await setup();
+  track(c.react).fire("onPointerDown", { clientX: xOf(0), pointerId: 1 });
+  await settle();
+  track(c.react).fire("onPointerMove", { clientX: xOf(2.5), pointerId: 1 });
+  await settle();
+  eq(c.react.find("knob").style.left, leftFor(1), "[17] 一次跨 3 档 → 直接落在最高档（中间不停）");
+  eq(c.react.findAll("tick").filter((n) => n.getAttribute("data-current") === "1").length, 1, "[17] 中间态只有一个「当前」刻度");
+  track(c.react).fire("onPointerUp", {});
+  await settle();
+
+  // 17f 起拖零额外延迟：落点与判定线一致时，刚越过 1/3 线就换档（不必先空拖 1/3 档距）
+  const d = await setup();
+  track(d.react).fire("onPointerDown", { clientX: xOf(0.2), pointerId: 1 });
+  await settle();
+  eq(d.react.find("knob").style.left, leftFor(0), "[17] 按下 u=0.2 → 最近档是最低档（与判定线一致，无冲突）");
+  track(d.react).fire("onPointerMove", { clientX: xOf(0.35), pointerId: 1 });
+  await settle();
+  eq(d.react.find("knob").style.left, leftFor(1 / 3), "[17] 只走 0.15 档距、刚过 1/3 线 → 立刻换档（起拖无死区）");
+  track(d.react).fire("onPointerUp", {});
+  await settle();
+
+  // 17e 四层共用同一个过渡变量（一起滑，不会撕开）；「减少动态效果」时全部关掉
+  const css = internals.CSS;
+  const ruleOf = (name) => css.slice(css.indexOf(`.${name}{`), css.indexOf("}", css.indexOf(`.${name}{`)));
+  ok(ruleOf("ces-knob").indexOf("transition:left var(--ces-slide)") > 0, "[17] 球的 left 走 --ces-slide 变量");
+  ok(ruleOf("ces-fill").indexOf("transition:width var(--ces-slide)") > 0, "[17] 填充的 width 走同一个变量");
+  ok(ruleOf("ces-energy").indexOf("width var(--ces-slide)") > 0, "[17] 能量层的 width 走同一个变量");
+  ok(ruleOf("ces-stars").indexOf("width var(--ces-slide)") > 0, "[17] 星空层的 width 走同一个变量");
+  ok(css.indexOf(`--ces-slide:${internals.SLIDE_EASE}`) > 0, "[17] 默认（快档）时长挂在容器变量上");
+  ok(
+    css.indexOf(`.ces-inline[data-slide='slow']{--ces-slide:${internals.SLIDE_EASE_SLOW}}`) > 0,
+    "[17] 慢档只换变量值（这样「减少动态效果」的 transition:none 仍然压得住）",
+  );
+  ok(internals.SLOW_DRAG_EXIT_MS < internals.SLOW_DRAG_ENTER_MS, "[17] 快慢切换带迟滞：退出阈值 < 进入阈值");
+  const reduce = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
+  for (const name of ["ces-knob", "ces-fill", "ces-energy", "ces-stars"]) {
+    ok(reduce.indexOf(`.${name}{transition:none}`) > 0, `[17] 「减少动态效果」时 .${name} 不做滑动动画`);
+  }
+  eq(internals.DETENT_THIRD, 1 / 3, "[17] 切档阈值就是 1/3 档距（用户指定）");
+}
+
+section("18. 快慢两档动画：拖得慢 → 动画也慢");
+{
+  const { internals } = await setup();
+  const R = internals.TRACK_RADIUS;
+  const xOf = (u) => R + (u / 3) * (300 - 2 * R);
+
+  const a = await setup();
+  const slideOf = () => a.react.find("root").getAttribute("data-slide");
+
+  track(a.react, 0, 300).fire("onPointerDown", { clientX: xOf(0), pointerId: 1 });
+  await settle();
+  eq(slideOf(), "fast", "[18] 按下（点哪去哪）走快档");
+
+  // 手快：两次换档挨得很近 → 保持快档
+  track(a.react, 0, 300).fire("onPointerMove", { clientX: xOf(0.5), pointerId: 1 });
+  await settle();
+  eq(slideOf(), "fast", "[18] 挨着就换下一档（手快）→ 仍是快档");
+
+  // 手慢：隔得比进入阈值更久才换下一档 → 换慢档
+  await wait(internals.SLOW_DRAG_ENTER_MS + 140);
+  track(a.react, 0, 300).fire("onPointerMove", { clientX: xOf(1.5), pointerId: 1 });
+  await settle();
+  eq(slideOf(), "slow", "[18] 隔得比进入阈值久 → 换成慢档（拖得慢，动画也慢）");
+
+  // 迟滞：间隔落在两个阈值之间 → 保持慢档，不来回跳
+  await wait(internals.SLOW_DRAG_EXIT_MS + 40);
+  track(a.react, 0, 300).fire("onPointerMove", { clientX: xOf(2.5), pointerId: 1 });
+  await settle();
+  eq(slideOf(), "slow", "[18] 间隔卡在两阈值之间 → 保持慢档（迟滞，不来回切）");
+
+  // 手又快了：间隔小于退出阈值 → 回快档
+  await wait(20);
+  track(a.react, 0, 300).fire("onPointerMove", { clientX: xOf(1.5), pointerId: 1 });
+  await settle();
+  eq(slideOf(), "fast", "[18] 间隔小于退出阈值 → 回到快档");
+
+  track(a.react, 0, 300).fire("onPointerUp", {});
+  await settle();
+
+  // 没换档就不该动这个开关
+  const before = slideOf();
+  await wait(internals.SLOW_DRAG_ENTER_MS + 140);
+  track(a.react, 0, 300).fire("onPointerMove", { clientX: xOf(1.55), pointerId: 1 });
+  await settle();
+  eq(slideOf(), before, "[18] 指针在动但没换档 → 快慢开关不动");
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */

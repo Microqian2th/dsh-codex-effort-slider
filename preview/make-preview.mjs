@@ -7,7 +7,7 @@
  *
  * 防漂移的两条硬措施（否则预览页会慢慢变成一张骗人的图）：
  *   1. CSS 直接从 `lib/client.js` 里**抽出来**，不是复制一份；
- *   2. 拖动数学（indexFromPct / pctFromIndex / energyFor / 粒子参数）也是从产物里
+ *   2. 拖动数学（pctFromIndex / energyFor / 粒子参数）也是从产物里
  *      **抽函数体**内联进页面 —— 抽取失败就抛错，绝不悄悄生成一个数学不一样的预览。
  *
  * 明确它不是什么：静态复刻，不接宿主、不发生任何档位写回。
@@ -93,7 +93,6 @@ function extractConstants(text, names) {
 const fns = [
   "clamp01",
   "pctFromIndex",
-  "indexFromPct",
   "mixColor",
   "rgbOf",
   "fillColorFor",
@@ -117,6 +116,12 @@ const constantNames = [
   "TRACK_HEIGHT",
   "KNOB_SIZE",
   "KNOB_RADIUS",
+  "TRACK_RADIUS",
+  "DETENT_THIRD",
+  "SLIDE_EASE",
+  "SLIDE_EASE_SLOW",
+  "SLOW_DRAG_ENTER_MS",
+  "SLOW_DRAG_EXIT_MS",
   "BASE_SPEEDUP",
   "STARFIELD_DURATION_MEAN",
   "STARFIELD_DURATION_SPREAD",
@@ -133,8 +138,12 @@ const constantNames = [
 ];
 const { values: constants, source: constantsSource } = extractConstants(source, constantNames);
 const css = extractCss(source, constantsSource);
-if (constants.KNOB_SIZE !== constants.TRACK_HEIGHT) {
-  throw new Error("产物里旋钮直径 ≠ 轨道高度（用户要求「与滑条同宽」）");
+// 观感基线：**球要比轨道大**（对齐 GPT 客户端：球浮在轨道之上，并压过轨道两端）。
+if (!(constants.KNOB_SIZE > constants.TRACK_HEIGHT)) {
+  throw new Error("产物里球直径 ≤ 轨道高度（应当球比轨道大）");
+}
+if (constants.TRACK_RADIUS * 2 !== constants.TRACK_HEIGHT) {
+  throw new Error("产物里轨道端头半径 ≠ 轨道高度的一半");
 }
 if (!css.includes(".ces-energy") || !css.includes(".ces-star__dot")) {
   throw new Error("抽出来的 CSS 里没有能量层/星空规则（产物结构变了）");
@@ -164,7 +173,7 @@ const html = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>dsh-codex-effort-slider — 观感预览（官方菜单那一行）</title>
+<title>better-dsh-codex-effort-slider — 观感预览（官方菜单那一行）</title>
 <style>
 /* ── 预览页自带的最小主题令牌（取自 DSH 官方 ui-theme 的真实取值）──
    真插件在 DSH 里直接用官方令牌，这里只是为了在浏览器里还原同一套观感。 */
@@ -173,6 +182,15 @@ body[data-ds-dark-theme]{--dsw-alias-bg-layer-1:#212123;--dsw-alias-bg-layer-2:#
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;gap:18px;padding:32px;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .stage{width:560px;max-width:100%}
+/* 截图态（?shot=1）：只留「模型 + 推理等级 + 滑条」两行 —— 两张预览图
+   preview/value-color-{light,dark}.png 就是这么截的（与旧图同一种取景）。
+   说明文字、控件、模型列表、输入框都去掉，页面不留外边距，方便按内容裁切。 */
+body[data-shot]{padding:0}
+body[data-shot] .note,
+body[data-shot] .controls,
+body[data-shot] .mock-composer,
+body[data-shot] .mock-option{display:none}
+body[data-shot] .stage{width:auto}
 .note{font-size:12px;line-height:1.7;color:var(--dsw-alias-label-tertiary);margin-bottom:14px}
 .note b{color:var(--dsw-alias-label-secondary)}
 /* 复刻官方模型菜单外壳（.menu / .cell 的真实取值：flex 行、34px 高、padding 0 8px、gap 6px） */
@@ -182,6 +200,12 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;gap:18px;padding:
 .mock-cellLabel{white-space:nowrap;flex:none}
 .mock-cellValue{text-overflow:ellipsis;white-space:nowrap;text-align:right;min-width:0;color:var(--dsw-alias-label-tertiary);flex:auto;overflow:hidden}
 .mock-chev{width:12px;height:12px;color:var(--dsw-alias-menu-icon);flex:none}
+/* 复刻官方模型列表那一行（option / optionCopy / modelName 的真实取值），
+   徽标用的是**从 lib/client.js 抽出来的真 CSS**（.ces-menu-badge）。 */
+.mock-option{box-sizing:border-box;border-radius:var(--dsw-radius-md);min-width:100%;min-height:34px;color:inherit;text-align:left;background:0 0;border:none;align-items:center;gap:6px;padding:5px 7px;display:flex}
+.mock-option:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.mock-optionCopy{flex:1;min-width:0;display:flex;align-items:center;gap:6px}
+.mock-modelName{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;overflow:hidden}
 .mock-composer{margin-top:18px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-tertiary);font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:10px}
 /* 复刻官方**收起态**模型席按钮（triggerLabel / triggerEffort 两个 span） */
 .mock-trigger{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;cursor:pointer}
@@ -202,19 +226,45 @@ ${css}
     这是 <b>观感预览</b>（静态复刻）：CSS 与拖动数学都是从 <code>lib/client.js</code> 抽取的真代码，
     注入手法也与插件一致（同样 4 个内联样式 + append 一个容器）。<b>拖到最右</b>看最高档能量层。
     注意输入框那一行<b>不再有任何东西</b>——控制项只在官方菜单的「推理等级」那一行里。
+    <br>
+    <b>1.3.0 起还有第二个界面</b>：输入框右侧那颗 <code>模型名 · 档位名 ⌄</code> 按钮点开的
+    <b>自建浮层</b>（按 <code>code.html</code> 复刻：一级 provider 页 / 二级模型列表带档位徽标 /
+    常驻滑条 / 档位弹层显示原始 API 取值）。它由 <code>lib/client.picker.js</code>（包内动态 chunk）实现，
+    <b>本页没有复刻它</b>——重启 DSH Desktop 后可直接在真界面里看。
   </div>
 
-  <div class="mock-menu" role="menu" aria-label="模型与推理等级">
+  <div class="mock-menu ces-menu-stable scrollable" role="menu" aria-label="模型与推理等级">
     <button class="mock-cell" role="menuitem" type="button" id="modelRow">
       <span class="mock-cellLabel">模型</span>
       <span class="mock-cellValue">DeepSeek-V41-Flash</span>
       <svg class="mock-chev" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4 11 8.5 6.5 13"></path></svg>
+      <!-- v1.2.0 的「归属标签」：插件在官方 cellValue/chevron 之后追加的一小段灰字（一级页就能确认切换生效） -->
+      <span class="ces-menu-provider" data-ces-part="provider-tag" title="deepseek">deepseek</span>
     </button>
     <button class="mock-cell" role="menuitem" type="button" id="effortRow">
       <span class="mock-cellLabel">推理等级</span>
       <span class="mock-cellValue" id="effortValue">High</span>
       <svg class="mock-chev" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4 11 8.5 6.5 13"></path></svg>
+      <!-- v1.2.0 的「档位 API 取值」：真插件给官方档位列表每一行追加的灰字（发送请求用的就是它） -->
+      <span class="ces-menu-api" id="effortApi" data-ces-part="api-value" title="API: high">high</span>
     </button>
+    <!-- v1.2.0 的「档位徽标」：插件往官方模型列表每一行的名字旁追加的一颗小胶囊。
+         真宿主里它是挂在官方 '.optionCopy' 里的（见 lib/client.js 的 decorateMenu）。 -->
+    <div class="mock-option" role="menuitemradio" aria-checked="true">
+      <span class="mock-optionCopy"><span class="mock-modelName">DeepSeek-V41-Flash</span><span class="ces-menu-badge" data-off="0" title="4 档：关闭 / Low / High / Max">4 档</span></span>
+    </div>
+    <div class="mock-option" role="menuitemradio" aria-checked="false">
+      <span class="mock-optionCopy"><span class="mock-modelName">gpt-6-astra</span><span class="ces-menu-badge" data-off="0" title="8 档：None / Minimal / Low / Medium / High / X-High / Max / Ultra">8 档</span></span>
+    </div>
+    <div class="mock-option" role="menuitemradio" aria-checked="false">
+      <span class="mock-optionCopy"><span class="mock-modelName">gpt-6-luna</span><span class="ces-menu-badge" data-off="0" title="7 档">7 档</span></span>
+    </div>
+    <div class="mock-option" role="menuitemradio" aria-checked="false">
+      <span class="mock-optionCopy"><span class="mock-modelName">gpt-6-spark</span><span class="ces-menu-badge" data-off="0" title="5 档">5 档</span></span>
+    </div>
+    <div class="mock-option" role="menuitemradio" aria-checked="false">
+      <span class="mock-optionCopy"><span class="mock-modelName">gpt-4o</span><span class="ces-menu-badge" data-off="1" title="该模型不支持推理等级">不支持</span></span>
+    </div>
   </div>
 
   <div class="mock-composer">
@@ -231,6 +281,7 @@ ${css}
     <button id="levels4">4 档（Off/Low/High/Max）</button>
     <button id="levels2">2 档（High/Max）</button>
     <button id="levels6">6 档（含 minimal/xhigh）</button>
+    <button id="levels8">8 档（Ultra 满能量）</button>
   </div>
 </div>
 
@@ -242,6 +293,10 @@ var ROW_PADDING_BLOCK = ${JSON.stringify(constants.ROW_PADDING_BLOCK)};
 var TRACK_HEIGHT = ${JSON.stringify(constants.TRACK_HEIGHT)};
 var KNOB_SIZE = ${JSON.stringify(constants.KNOB_SIZE)};
 var KNOB_RADIUS = ${JSON.stringify(constants.KNOB_RADIUS)};
+var TRACK_RADIUS = ${JSON.stringify(constants.TRACK_RADIUS)};
+var DETENT_THIRD = ${JSON.stringify(constants.DETENT_THIRD)};
+var SLOW_DRAG_ENTER_MS = ${JSON.stringify(constants.SLOW_DRAG_ENTER_MS)};
+var SLOW_DRAG_EXIT_MS = ${JSON.stringify(constants.SLOW_DRAG_EXIT_MS)};
 var BASE_SPEEDUP = ${JSON.stringify(constants.BASE_SPEEDUP)};
 var STARFIELD_DURATION_MEAN = ${JSON.stringify(constants.STARFIELD_DURATION_MEAN)};
 var STARFIELD_DURATION_SPREAD = ${JSON.stringify(constants.STARFIELD_DURATION_SPREAD)};
@@ -261,7 +316,9 @@ var PARTICLES = buildParticles();
 var LEVELS = {
   "4": [{id:"off",name:"Off"},{id:"low",name:"Low"},{id:"high",name:"High"},{id:"max",name:"Max"}],
   "2": [{id:"high",name:"High"},{id:"max",name:"Max"}],
-  "6": [{id:"off",name:"Off"},{id:"minimal",name:"Minimal"},{id:"low",name:"Low"},{id:"medium",name:"Medium"},{id:"xhigh",name:"XHigh"},{id:"max",name:"Max"}]
+  "6": [{id:"off",name:"Off"},{id:"minimal",name:"Minimal"},{id:"low",name:"Low"},{id:"medium",name:"Medium"},{id:"xhigh",name:"XHigh"},{id:"max",name:"Max"}],
+  /* v1.2.0：8 档那条连续能量阶梯 —— Max 已是中后段（11/14），Ultra 满星云。 */
+  "8": [{id:"none",name:"None"},{id:"minimal",name:"Minimal"},{id:"low",name:"Low"},{id:"medium",name:"Medium"},{id:"high",name:"High"},{id:"xhigh",name:"X-High"},{id:"max",name:"Max"},{id:"ultra",name:"Ultra"}]
 };
 var current = "4";
 var index = 2;
@@ -276,13 +333,19 @@ row.style.paddingBottom = ROW_PADDING_BLOCK;
 
 var host = document.createElement("div");
 host.className = "ces-inline";
+host.dataset.slide = "fast"; // 真插件每次渲染都会写 data-slide，这里保持一致
 host.setAttribute("data-energy", "0");
+host.setAttribute("data-disabled", "0"); // 禁用态是渲染的完整投影：预览里始终「可用」
 row.appendChild(host);
+
+/** 档位列表每行的原始 API 取值（真插件由 decorateMenu 追加；预览页预置在 HTML 里）。 */
+var apiSpan = document.getElementById("effortApi");
+if (!apiSpan) throw new Error("预览页缺少 #effortApi（档位 API 取值的落点）");
 
 var track = document.createElement("div");
 track.className = "ces-track";
 track.setAttribute("role", "slider");
-track.setAttribute("tabindex", "0");
+// 真插件刻意不做键盘操作（不 tabindex、不挂 keydown）；预览页保持一致。
 var fill = document.createElement("div");
 fill.className = "ces-fill";
 var energy = document.createElement("div");
@@ -357,6 +420,7 @@ function renderTicks() {
     tick.className = "ces-tick";
     tick.style.left = knobOffsetOf(pctFromIndex(i, levels.length));
     tick.dataset.on = i <= index ? "1" : "0";
+    tick.dataset.current = i === index ? "1" : "0";
     ticks.appendChild(tick);
   });
 }
@@ -373,6 +437,8 @@ function render(pct) {
   knob.style.left = offset;
   host.style.setProperty("--ces-energy", String(strength));
   host.dataset.energy = strength > 0 ? "1" : "0";
+  // Max 档（最高一档）：隐藏其他档位的定位点（与 lib/client.js 的 data-max 规则一致）
+  host.dataset.max = index >= levels.length - 1 ? "1" : "0";
   row.style.boxShadow = strength > 0 ? "inset 0 0 0 1px rgba(168,85,247," + (0.16 + 0.34 * strength).toFixed(2) + ")" : "";
   valueSpan.textContent = shown.name;
   // 官方菜单里那一行的数值文字：跟着**显示中**的位置/档位着色（Off 档 = 空串 = 官方灰）
@@ -383,45 +449,90 @@ function render(pct) {
   track.setAttribute("aria-valuemax", String(levels.length - 1));
   track.setAttribute("aria-valuenow", String(index));
   track.setAttribute("aria-valuetext", shown.name);
+  // v1.2.0 的「档位 API 取值」：官方档位列表每一行右侧那枚灰字（发送请求用的就是它）
+  apiSpan.textContent = shown.id;
+  apiSpan.setAttribute("title", "API: " + shown.id);
   applyParticles(shownPct);
   renderTicks();
 }
 
 function pctAt(clientX) {
   var rect = track.getBoundingClientRect();
-  var usable = rect.width - KNOB_RADIUS * 2;
+  var usable = rect.width - TRACK_RADIUS * 2;
   if (!(usable > 0)) return null;
-  return clamp01((clientX - rect.left - KNOB_RADIUS) / usable);
+  return clamp01((clientX - rect.left - TRACK_RADIUS) / usable);
 }
 
-function onMove(clientX) {
+/*
+ * 拖动手感与真插件一致：旋钮**不跟手**，指针越过"每档 +1/3 档距"的判定线才换档，
+ * 位置变化交给 CSS 过渡滑过去（真插件里由 React 重渲染 + transition 完成，这里同构）。
+ */
+var press = { u: 0, index: 0, conflict: false, active: false };
+
+function unitAt(clientX) {
   var pct = pctAt(clientX);
-  if (pct === null) return;
-  index = indexFromPct(pct, LEVELS[current].length);
-  render(pct);
+  if (pct === null) return null;
+  return pct * (LEVELS[current].length - 1);
+}
+
+function mappingOf(u) {
+  var last = LEVELS[current].length - 1;
+  return Math.max(0, Math.min(last, Math.floor(u - DETENT_THIRD) + 1));
+}
+
+function resolveTarget(u) {
+  var mapped = mappingOf(u);
+  if (press.active) {
+    if (!press.conflict || mapped === press.index || Math.abs(u - press.u) >= DETENT_THIRD) press.active = false;
+    else return press.index;
+  }
+  return mapped;
+}
+
+var lastStepAt = 0;
+var slideSlow = false;
+
+/**
+ * 快慢两档动画（与 lib/client.js 同一套判据）：与上一次换档的间隔决定用哪一档，
+ * 两个阈值构成迟滞。只改 host 上的 data-slide，CSS 那边靠 --ces-slide 变量接管。
+ */
+function noteStepTiming() {
+  var now = Date.now();
+  var gap = now - lastStepAt;
+  lastStepAt = now;
+  if (slideSlow) slideSlow = gap >= SLOW_DRAG_EXIT_MS;
+  else slideSlow = gap > SLOW_DRAG_ENTER_MS;
+  host.dataset.slide = slideSlow ? "slow" : "fast";
+}
+
+function setIndex(next) {
+  var levels = LEVELS[current];
+  var clamped = Math.max(0, Math.min(levels.length - 1, next));
+  if (clamped === index) return;
+  index = clamped;
+  noteStepTiming();
+  render();
 }
 
 track.addEventListener("pointerdown", function (event) {
   dragging = true;
-  track.setPointerCapture(event.pointerId);
-  onMove(event.clientX);
+  try { track.setPointerCapture(event.pointerId); } catch (error) { /* 合成事件没有真指针 */ }
+  var u = unitAt(event.clientX);
+  if (u === null) return;
+  var nearest = Math.round(u);
+  lastStepAt = Date.now();   // 第一次换档的间隔从"按下"算起
+  press = { u: u, index: nearest, conflict: mappingOf(u) !== nearest, active: true };
+  setIndex(nearest);   // 按下 = 点哪去哪（取最近档）
 });
-track.addEventListener("pointermove", function (event) { if (dragging) onMove(event.clientX); });
-function end() { if (!dragging) return; dragging = false; render(); }
+track.addEventListener("pointermove", function (event) {
+  if (!dragging) return;
+  var u = unitAt(event.clientX);
+  if (u === null) return;
+  setIndex(resolveTarget(u));
+});
+function end() { if (!dragging) return; dragging = false; press.active = false; render(); }
 track.addEventListener("pointerup", end);
 track.addEventListener("pointercancel", end);
-track.addEventListener("keydown", function (event) {
-  var levels = LEVELS[current];
-  var next = null;
-  if (event.key === "ArrowLeft" || event.key === "ArrowDown") next = Math.max(0, index - 1);
-  else if (event.key === "ArrowRight" || event.key === "ArrowUp") next = Math.min(levels.length - 1, index + 1);
-  else if (event.key === "Home") next = 0;
-  else if (event.key === "End") next = levels.length - 1;
-  else return;
-  event.preventDefault();
-  index = next;
-  render();
-});
 
 function setLevels(key) {
   current = key;
@@ -429,14 +540,30 @@ function setLevels(key) {
   render();
 }
 
-/* 支持 ?level=off|low|high|max（无头截图和自查都用它定位到具体档位） */
+/* 支持 ?level=<档位 id>（无头截图和自查都用它定位到具体档位）。
+   档位 id 在**所有**模型集里找一遍：问的是 ultra/none/xhigh 这类只在 8 档或 6 档出现的档位时，
+   自动切到含它的那一套，而不是在当前那套里白找一遍。 */
 (function applyQuery() {
   var wanted = (new URLSearchParams(location.search).get("level") || "").toLowerCase();
   if (wanted === "") return;
-  var levels = LEVELS[current];
-  for (var i = 0; i < levels.length; i += 1) {
-    if (levels[i].id === wanted) { index = i; return; }
+  var keys = Object.keys(LEVELS).filter(function (key) { return key === current; })
+    .concat(Object.keys(LEVELS).filter(function (key) { return key !== current; }));
+  for (var k = 0; k < keys.length; k += 1) {
+    var levels = LEVELS[keys[k]];
+    for (var i = 0; i < levels.length; i += 1) {
+      if (levels[i].id === wanted) { current = keys[k]; index = i; return; }
+    }
   }
+})();
+
+/* 截图态与主题：?shot=1 走「只有两行」的取景，?dark=1（或 ?theme=dark）直接进深色。
+   两张预览图就是 shot × {light,dark} × {off,low,high,max} 各截一张再拼起来的，
+   所以这两个开关不是"给用户看的"，而是**这两张图的生成方式**（可复现，不用手工点按钮）。 */
+(function applyQueryShot() {
+  var params = new URLSearchParams(location.search);
+  if (params.get("shot") === "1") document.body.setAttribute("data-shot", "");
+  var theme = (params.get("dark") || params.get("theme") || "").toLowerCase();
+  if (theme === "1" || theme === "true" || theme === "dark") document.body.setAttribute("data-ds-dark-theme", "");
 })();
 
 document.getElementById("theme").addEventListener("click", function () {
@@ -446,6 +573,7 @@ document.getElementById("theme").addEventListener("click", function () {
 document.getElementById("levels4").addEventListener("click", function () { setLevels("4"); });
 document.getElementById("levels2").addEventListener("click", function () { setLevels("2"); });
 document.getElementById("levels6").addEventListener("click", function () { setLevels("6"); });
+document.getElementById("levels8").addEventListener("click", function () { setLevels("8"); });
 
 render();
 </script>

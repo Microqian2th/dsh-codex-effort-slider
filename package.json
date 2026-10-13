@@ -1,6 +1,6 @@
 {
-  "name": "dsh-codex-effort-slider",
-  "version": "1.0.0",
+  "name": "better-dsh-codex-effort-slider",
+  "version": "1.3.10",
   "private": true,
   "description": "Codex 风格的推理等级滑条：把 DSH 输入框工具行的推理等级档位换成一条可拖动的连续滑条 / A Codex-style reasoning-effort slider for DeepSeek Harness",
   "license": "MIT",
@@ -22,18 +22,17 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
-    "cordis.patch.yml",
-    "install-profile.ps1",
-    "install.cmd",
-    "LICENSE",
-    "test",
-    "preview",
-    "README.md"
+    "lib/client.picker.js",
+    "cordis.patch.yml"
   ],
   "scripts": {
+    "build": "node build/pack-picker.mjs",
+    "pretest": "node build/pack-picker.mjs",
     "test": "node test/client.test.mjs",
     "preview": "node preview/make-preview.mjs",
-    "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File ./pack-dist.ps1"
+    "prepack": "node build/pack-picker.mjs",
+    "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File ./pack-dist.ps1",
+    "pack:src": "powershell -NoProfile -ExecutionPolicy Bypass -File ./pack-dist.ps1 -Source"
   },
   "engines": {
     "node": ">=22"

@@ -111,6 +111,12 @@ const fns = [
   "buildParticles",
   "isOffLevel",
   "valueColorFor",
+  // 连续运动引擎：预览页用**同一份**函数跑，观感才与真插件逐帧一致
+  "clampAbs",
+  "motionStep",
+  "motionSettled",
+  "decayPointerSpeed",
+  "releaseIndexFor",
 ].map((name) => extractFunction(source, name)).join("\n\n");
 const constantNames = [
   "ROW_PADDING_BLOCK",
@@ -120,6 +126,14 @@ const constantNames = [
   // CSS 数组里用到的圆角简写（左端 = 旋钮半径的真半圆 + 右端直角）。
   // 必须排在 KNOB_RADIUS 之后：常量按本列表顺序在同一作用域里求值。
   "FILL_RADIUS",
+  // 连续运动引擎的参数（预览页的拖动逻辑要用同一套，否则观感与真插件不一致）
+  "MOTION",
+  "MOTION_REDUCED",
+  "RELEASE_PROJECT_S",
+  "POINTER_SPEED_EMA",
+  "POINTER_STALE_S",
+  "POINTER_SPEED_TAU",
+  "MAX_FRAME_DT",
   "BASE_SPEEDUP",
   "STARFIELD_DURATION_MEAN",
   "STARFIELD_DURATION_SPREAD",
@@ -241,23 +255,10 @@ ${css}
 /* ── 以下函数体从 lib/client.js 抽取（数学与真插件逐字一致）── */
 ${fns}
 
-var ROW_PADDING_BLOCK = ${JSON.stringify(constants.ROW_PADDING_BLOCK)};
-var TRACK_HEIGHT = ${JSON.stringify(constants.TRACK_HEIGHT)};
-var KNOB_SIZE = ${JSON.stringify(constants.KNOB_SIZE)};
-var KNOB_RADIUS = ${JSON.stringify(constants.KNOB_RADIUS)};
-var BASE_SPEEDUP = ${JSON.stringify(constants.BASE_SPEEDUP)};
-var STARFIELD_DURATION_MEAN = ${JSON.stringify(constants.STARFIELD_DURATION_MEAN)};
-var STARFIELD_DURATION_SPREAD = ${JSON.stringify(constants.STARFIELD_DURATION_SPREAD)};
-var STARFIELD_MIN = ${JSON.stringify(constants.STARFIELD_MIN)};
-var GOLDEN_RATIO = ${JSON.stringify(constants.GOLDEN_RATIO)};
-var MAX_SPEED_FACTOR = ${JSON.stringify(constants.MAX_SPEED_FACTOR)};
-var MIN_HEIGHT_SLOTS = ${JSON.stringify(constants.MIN_HEIGHT_SLOTS)};
-var ENERGY_START = ${JSON.stringify(constants.ENERGY_START)};
-var ENERGY_END = ${JSON.stringify(constants.ENERGY_END)};
-var COLOR_BLUE = ${JSON.stringify(constants.COLOR_BLUE)};
-var COLOR_VIOLET = ${JSON.stringify(constants.COLOR_VIOLET)};
-var COLOR_DEEP = ${JSON.stringify(constants.COLOR_DEEP)};
-var COLOR_TEXT_VIOLET = ${JSON.stringify(constants.COLOR_TEXT_VIOLET)};
+/* ⚠️ 这里**由 constantNames 自动生成**，不再手写清单 ——
+   早先手写过，结果新增常量忘了加，预览页一按下就 ReferenceError 整页挂掉。
+   手写清单与 constantNames 必须同步，这种"两处维护"迟早漏一侧。 */
+${constantNames.map((n) => `var ${n} = ${JSON.stringify(constants[n])};`).join("\n")}
 /* 星尘参数表：抽出来的 starDelayFor 会读 PARTICLES，这里必须真的建出来
    （少了它预览页会 ReferenceError 整个脚本挂掉 —— 生成期有守卫盯着这件事）。 */
 var PARTICLES = buildParticles();
@@ -359,7 +360,15 @@ function renderTicks() {
     var tick = document.createElement("span");
     tick.className = "ces-tick";
     tick.style.left = knobOffsetOf(pctFromIndex(i, levels.length));
-    tick.dataset.on = i <= index ? "1" : "0";
+    // 预览页没有设置 UI，用与卡片一致的默认值：显示 + 只亮目标。
+    // 角色判定必须与 lib/client.js 的渲染循环一致（同一条 t === shownIndex /
+    // t < shownIndex 规则），否则预览观感会与真插件不符。
+    // ⚠️ 本文件这段代码在**模板字符串里**，注释中不能出现反引号（会提前结束模板）。
+    var isTarget = i === index;
+    var isReached = i < index;
+    tick.dataset.tick = isTarget ? "target" : (isReached ? "reached" : "ahead");
+    tick.dataset.lit = isTarget ? "1" : "0";
+    tick.dataset.hide = "0";
     ticks.appendChild(tick);
   });
 }
@@ -397,20 +406,93 @@ function pctAt(clientX) {
   return clamp01((clientX - rect.left - KNOB_RADIUS) / usable);
 }
 
+/* ── 连续运动引擎（与真插件同一份函数 + 同一套参数）──
+   预览页也要逐帧跑引擎，否则观感与真插件不一致（这正是当初踩过的坑：
+   预览页"看起来好了"但真插件不一样）。 */
+var motion = { x: index / (LEVELS[current].length - 1), v: 0, a: 0, target: 0, vPtr: 0 };
+var frameHandle = null;
+var lastTs = 0;
+var lastPtrPct = null;
+/** 上次 pointermove 的时刻（衰减判定与指针速度都用它，不能用帧时刻 lastTs）。 */
+var lastPointerAt = 0;
+var snapIndex = null;
+
+function nowMs() {
+  return (typeof performance !== "undefined" && typeof performance.now === "function")
+    ? performance.now() : Date.now();
+}
+function scheduleFrame(cb) {
+  if (typeof requestAnimationFrame === "function") return { raf: true, id: requestAnimationFrame(cb) };
+  return { raf: false, id: setTimeout(function () { cb(nowMs()); }, 16) };
+}
+function cancelFrame(h) {
+  if (!h) return;
+  if (h.raf) { if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(h.id); }
+  else clearTimeout(h.id);
+}
+function startFrames() {
+  if (frameHandle !== null) return;
+  lastTs = nowMs();
+  var step = function (ts) {
+    frameHandle = null;
+    var dt = Math.min(MAX_FRAME_DT, Math.max(0.001, (ts - lastTs) / 1000));
+    lastTs = ts;
+    // 指针速度保鲜：指针停下后不再有 pointermove，不衰减就会冻结成恒定的力
+    // （实测会让滑块永久停在鼠标一侧 13% 处，且帧循环永不退出）。
+    // 注意用**距上次 pointermove 的实际时长**，不是帧间隔 dt。
+    motion.vPtr = decayPointerSpeed(motion.vPtr, (ts - lastPointerAt) / 1000, POINTER_STALE_S, POINTER_SPEED_TAU);
+    motionStep(motion, dt, MOTION);
+    if (motionSettled(motion, MOTION)) {
+      motion.x = motion.target; motion.v = 0; motion.a = 0;
+      if (dragging) { render(motion.x); return; }   // 追上了指针，但手指还按着
+      index = snapIndex !== null ? snapIndex : index;
+      snapIndex = null;
+      render();
+      return;
+    }
+    // 拖动中档位跟指针；吸附中冻结在决定的档位
+    index = dragging ? indexFromPct(motion.x, LEVELS[current].length)
+                     : (snapIndex !== null ? snapIndex : index);
+    render(motion.x);
+    frameHandle = scheduleFrame(step);
+  };
+  frameHandle = scheduleFrame(step);
+}
+
 function onMove(clientX) {
   var pct = pctAt(clientX);
   if (pct === null) return;
-  index = indexFromPct(pct, LEVELS[current].length);
-  render(pct);
+  // 指针速度（EMA 平滑）→ 前馈 + 松手外推
+  // ⚠️ 时间基准用**上次 pointermove 的时刻**，不能用帧时刻 lastTs（两者间可能夹着若干帧）
+  var now = nowMs();
+  var dtPtr = (now - lastPointerAt) / 1000;
+  if (lastPtrPct !== null && dtPtr > 0.001) {
+    var raw = (pct - lastPtrPct) / dtPtr;
+    motion.vPtr = motion.vPtr * (1 - POINTER_SPEED_EMA) + clampAbs(raw, MOTION.vmax) * POINTER_SPEED_EMA;
+  }
+  lastPtrPct = pct;
+  lastPointerAt = now;
+  motion.target = pct;   // ← 只改目标
+  startFrames();
 }
 
 track.addEventListener("pointerdown", function (event) {
   dragging = true;
+  snapIndex = null;
+  lastPtrPct = null;
   track.setPointerCapture(event.pointerId);
   onMove(event.clientX);
 });
 track.addEventListener("pointermove", function (event) { if (dragging) onMove(event.clientX); });
-function end() { if (!dragging) return; dragging = false; render(); }
+function end() {
+  if (!dragging) return;
+  dragging = false;
+  // 松手：按指针速度外推落点，目标改为档位点，**速度继承**
+  snapIndex = releaseIndexFor(motion.target, motion.vPtr, LEVELS[current].length);
+  motion.target = pctFromIndex(snapIndex, LEVELS[current].length);
+  motion.vPtr = 0;
+  startFrames();
+}
 track.addEventListener("pointerup", end);
 track.addEventListener("pointercancel", end);
 track.addEventListener("keydown", function (event) {
@@ -429,6 +511,12 @@ track.addEventListener("keydown", function (event) {
 function setLevels(key) {
   current = key;
   index = Math.min(index, LEVELS[key].length - 1);
+  // 切档位模型时把引擎重置到当前档位（否则它会带着旧位置滑过去）
+  cancelFrame(frameHandle);
+  frameHandle = null;
+  motion.x = pctFromIndex(index, LEVELS[key].length);
+  motion.v = 0; motion.a = 0; motion.target = motion.x; motion.vPtr = 0;
+  snapIndex = null;
   render();
 }
 

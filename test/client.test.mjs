@@ -49,6 +49,19 @@ function section(title) {
 }
 
 /**
+ * 取**滑条**那一条注册。
+ *
+ * 插件现在注册两个插槽条目：滑条本体（`conversation.input.right`）与设置卡片
+ * （`plugins.bundle.config`，`key` = 包名）。两者都进 `host.registered`，
+ * 所以按 `opts.name` 精确挑，而不是赌顺序。
+ */
+function sliderEntry(host) {
+  const entry = host.registered.find((item) => item.opts && item.opts.name === "conversation.input.right");
+  if (!entry) throw new Error("没有找到 conversation.input.right 的注册条目");
+  return entry;
+}
+
+/**
  * 起一个完整场景：假官方菜单 + 真产物 + 假宿主，并把组件挂进**官方 composer 内部**
  * （插槽在真实布局里就在那里，桥要靠这个位置判定"哪颗席是我的"）。
  */
@@ -58,7 +71,7 @@ async function setup(options = {}) {
   const bundle = loadBundle(BUNDLE, document, { reducedMotion: options.reducedMotion === true });
   const host = createFakeHost(options.host ?? {});
   bundle.plugin.apply(host.ctx);
-  const entry = host.registered[0];
+  const entry = sliderEntry(host);
   if (!entry) throw new Error("插件没有注册任何插槽条目");
   bundle.react.mount(entry.Component, Object.assign({ sessionId: "session-abcdef" }, options.props ?? {}), menu.composer);
   await settle();
@@ -230,7 +243,7 @@ section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-
   const bundleA = loadBundle(BUNDLE, a, {});
   const hostA = createFakeHost({});
   bundleA.plugin.apply(hostA.ctx);
-  bundleA.react.mount(hostA.registered[0].Component, { sessionId: "session-abcdef" }, menuA.composer);
+  bundleA.react.mount(sliderEntry(hostA).Component, { sessionId: "session-abcdef" }, menuA.composer);
   await settle();
   eq(menuA.effortRow.style.paddingTop ?? "", "", "[3] 没有 aria-controls → 那一行完全不动");
   eq(bundleA.react.portalHosts.length, 0, "[3] 也没有 portal");
@@ -243,7 +256,7 @@ section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-
     const bundle = loadBundle(BUNDLE, document, {});
     const host = createFakeHost({});
     bundle.plugin.apply(host.ctx);
-    bundle.react.mount(host.registered[0].Component, { sessionId: "session-abcdef" }, menu.composer);
+    bundle.react.mount(sliderEntry(host).Component, { sessionId: "session-abcdef" }, menu.composer);
     await settle();
     return { menu, bundle };
   })();
@@ -258,7 +271,7 @@ section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-
     const bundle = loadBundle(BUNDLE, document, {});
     const host = createFakeHost({});
     bundle.plugin.apply(host.ctx);
-    bundle.react.mount(host.registered[0].Component, { sessionId: "session-abcdef" }, mine.composer);
+    bundle.react.mount(sliderEntry(host).Component, { sessionId: "session-abcdef" }, mine.composer);
     await settle();
     return { other, mine, bundle };
   })();
@@ -682,7 +695,13 @@ section("11. 结构上不存在消息注入（防同类插件的致命 bug）");
 {
   const { host, plugin } = await setup();
   eq(host.subscriptions.length, 0, "[11] 没有 ctx.on(...) —— 不监听任何宿主钩子");
-  ok(host.registered.length === 1, "[11] 只做了一件事：注册一个插槽条目");
+  // 插件注册**两个**插槽条目：滑条本体 + 官方插件详情页的设置卡片。
+  // 这条断言守的是"除了这两块 UI 什么都没有"，尤其没有任何会话事件注入。
+  eq(host.registered.length, 2, "[11] 只注册两块 UI：滑条 + 设置卡片");
+  eq(sliderEntry(host).opts.name, "conversation.input.right", "[11] 其一是输入框工具行的滑条");
+  const cardEntry = host.registered.find((item) => item.opts && item.opts.name === "plugins.bundle.config");
+  ok(cardEntry !== undefined, "[11] 其二挂在官方插件页的 plugins.bundle.config 槽位");
+  eq(cardEntry.opts.key, "dsh-codex-effort-slider", "[11] 设置卡片的 key 必须是包名（key 错会静默不渲染）");
   ok(CODE.indexOf("session.append") < 0 && CODE.indexOf(".append(") < 0, "[11] 代码里没有任何会话 append（除了给那一行 append 容器）");
   ok(CODE.indexOf('role: "user"') < 0 && CODE.indexOf('"user/message"') < 0, "[11] 不构造 user 消息");
   ok(CODE.indexOf("producer-owned") < 0, "[11] 不触碰 V4 会话准入面");
@@ -876,7 +895,7 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   const tickCss = internals.CSS.slice(internals.CSS.indexOf(".ces-tick{"), internals.CSS.indexOf("}", internals.CSS.indexOf(".ces-tick{")));
   ok(tickCss.indexOf("width:3px;height:3px") > 0, "[16] 刻度点 5px → 3px（更小）");
   ok(tickCss.indexOf("26%,transparent") > 0, "[16] 未达到的刻度 38% → 26%（更淡）");
-  ok(internals.CSS.indexOf(".ces-tick[data-on='1']{background:rgba(255,255,255,.5)}") > 0, "[16] 已达刻度 92% → 50% 白（更淡，不再和星星抢眼）");
+  ok(internals.CSS.indexOf(".ces-tick[data-lit='1']{background:rgba(255,255,255,.5)}") > 0, "[16] 亮的刻度 92% → 50% 白（更淡，不再和星星抢眼）");
   const tickNodes = off.react.findAll("tick");
   ok(tickNodes.length >= 4, `[16] 4 档就有 4 个刻度点（实测 ${tickNodes.length}）`);
 }
@@ -1172,12 +1191,13 @@ section("19. 两种动画模式：简洁 / 完整，且都不受系统「减少�
   const ctx = await setup();
   const I = ctx.internals;
 
-  // ① 设置只剩两项（灵敏度/力度已按要求删除）
-  eq(I.SETTINGS_SCHEMA.length, 2, "[19] 设置只有两项（动画 + 刻度点）");
-  eq(I.SETTINGS_SCHEMA.map((it) => it.key).join(","), "motion,reachedTicks", "[19] 键名正确，力度已删除");
+  // ① 设置共四项：动画（下拉）+ 隐藏（下拉）+ 目标/已到达（开关）
+  eq(I.SETTINGS_SCHEMA.length, 4, "[19] 设置四项（动画 + 隐藏 + 目标 + 已到达）");
+  eq(I.SETTINGS_SCHEMA.map((it) => it.key).join(","), "motion,hideTicks,highlightTarget,highlightReached",
+    "[19] 键名正确，力度已删除、reachedTicks 已拆分");
   eq(I.readSettings().motion, "full", "[19] 动画默认 = 完整动画");
   ok(I.SETTINGS_SCHEMA.every((it) => it.default !== undefined), "[19] 每项都显式声明 default");
-  eq(I.SETTINGS_SCHEMA[0].options.map((o) => o.label).join("/"), "简洁动画/完整动画", "[19] 两个选项的文案");
+  eq(I.SETTINGS_SCHEMA[0].options.map((o) => o.label).join("/"), "完整动画/简洁动画", "[19] 两个选项的文案（默认值排第一）");
 
   // ② 两种模式的参数组
   ok(I.motionParamsForMode() === I.MOTION, "[19] 完整动画 → MOTION（他的方案）");
@@ -1189,11 +1209,24 @@ section("19. 两种动画模式：简洁 / 完整，且都不受系统「减少�
   ok(I.RELEASE_PROJECT_S === 0, "[19] 灵敏度 = 0（非零外推会把落点推到另一档 → 抽搐）");
 
   // ④ 系统「减少动态效果」完全不影响行为
+  //
+  // ⚠️ 每次写设置后必须 `await settle()` 再比较：设置广播会触发重渲染，
+  //    而 `await setup(...)` 内含 settle —— 不落定的话，先建的那个实例
+  //    已经渲染成新值、后建的那个还没有，比较的其实是"同一个值的两个时刻"。
+  //
+  // 断言方式是**两边各自对照期望值**，而不是互相对照：
+  // 互相对照在两边都停在旧值时也会通过，那就测不出"设置根本没生效"。
   for (const mode of ["full", "quick"]) {
+    const wantMotion = mode === "quick" ? "concise" : "full";
     const a = await setup({ reducedMotion: true });
-    a.internals.writeSettings({ motion: mode });
     const b = await setup({ reducedMotion: false });
+    a.internals.writeSettings({ motion: mode });
     b.internals.writeSettings({ motion: mode });
+    await settle();
+    eq(a.react.find("root").getAttribute("data-motion"), wantMotion,
+      `[19] ${mode}：系统要求减少动态时也按设置渲染（data-motion）`);
+    eq(b.react.find("root").getAttribute("data-motion"), wantMotion,
+      `[19] ${mode}：系统没要求时同样按设置渲染（data-motion）`);
     eq(a.react.find("root").getAttribute("data-motion"), b.react.find("root").getAttribute("data-motion"),
       `[19] ${mode}：系统开关不改变 data-motion`);
     eq(String(a.react.find("track").getAttribute("title")), String(b.react.find("track").getAttribute("title")),
@@ -1208,13 +1241,15 @@ section("19. 两种动画模式：简洁 / 完整，且都不受系统「减少�
     eq(await drive(a), await drive(b), `[19] ${mode}：逐帧位置与系统设置无关`);
   }
 
-  // ⑤ 刻度点（默认隐藏，可切换）
-  eq(I.readSettings().reachedTicks, "hidden", "[19] 刻度点默认 = 隐藏");
-  I.writeSettings({ reachedTicks: "highlight" });
-  eq(I.readSettings().reachedTicks, "highlight", "[19] 可切到亮白显示");
-  ok(/data-reached-ticks='hidden'/.test(I.CSS), "[19] CSS 含隐藏规则");
-  ok(/data-reached-ticks='dim'/.test(I.CSS), "[19] CSS 含同色规则");
-  I.writeSettings({ reachedTicks: "hidden" });
+  // ⑤ 刻度点：默认「显示」+ 只亮目标
+  eq(I.readSettings().hideTicks, "show", "[19] 隐藏默认 = 显示");
+  eq(I.readSettings().highlightTarget, true, "[19] 目标默认 = 亮");
+  eq(I.readSettings().highlightReached, false, "[19] 已到达默认 = 不亮（只亮目标）");
+  I.writeSettings({ hideTicks: "hideReached" });
+  eq(I.readSettings().hideTicks, "hideReached", "[19] 可切到隐藏已到达");
+  ok(I.CSS.indexOf(".ces-tick[data-hide='1']{display:none}") > 0, "[19] CSS 含隐藏规则");
+  ok(I.CSS.indexOf(".ces-tick[data-lit='1']{background:rgba(255,255,255,.5)}") > 0, "[19] CSS 含亮白规则");
+  I.writeSettings({ hideTicks: "show" });
 
   // ⑥ 未按键的 move 不得带动滑条
   {
@@ -1392,7 +1427,7 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
     const bundle = loadBundle(BUNDLE, document, {});
     const host = createFakeHost({});
     bundle.plugin.apply(host.ctx);
-    bundle.react.mount(host.registered[0].Component, { sessionId: "session-abcdef" }, menu.composer);
+    bundle.react.mount(sliderEntry(host).Component, { sessionId: "session-abcdef" }, menu.composer);
     await settle();
     const react = bundle.react;
     return {
@@ -1547,6 +1582,824 @@ section("48. 目录就绪：插件必须声明 remote / remote.session（参考�
   }
   ok(/release-abort/.test(src), "[48] 档位列表为空时 endDrag 会中止落点（release-abort 守卫）");
   ok(/!\(levelCount > 0\)/.test(src), "[48] 有 levelCount > 0 的前置判断");
+}
+
+/* ══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 起一个场景并挂载**设置卡片**那一条注册（不是滑条）。
+ *
+ * 放在顶层（而不是某个 section 的块里）：第 23 节与第 26 节都要用，
+ * 块作用域内定义的话后一节取不到。
+ */
+async function setupCard(options = {}) {
+  const document = createDocument();
+  const bundle = loadBundle(BUNDLE, document, {});
+  const host = createFakeHost(options.host ?? {});
+  bundle.plugin.apply(host.ctx);
+  const card = host.registered.find((item) => item.opts && item.opts.name === "plugins.bundle.config");
+  if (!card) throw new Error("插件没有注册设置卡片");
+  // 真渲染器会把 opts.inject() 的返回值作为 props 交给组件；这里照做，
+  // 并按官方契约补上 t（locale）与 view。
+  const injected = card.opts.inject();
+  const dict = host.localeRegistrations.find((r) => r.ns === card.opts.locale);
+  const dictFor = (lang) => (dict && dict.dictionaries[lang]) || {};
+  const t = (key, vars) => {
+    const raw = dictFor("zh")[key] !== undefined ? dictFor("zh")[key] : key;
+    if (vars === undefined || typeof raw !== "string") return raw;
+    return raw.replace(/\{(\w+)\}/g, (all, name) => (vars[name] !== undefined ? String(vars[name]) : all));
+  };
+  // `hooks` 里的每一项会被官方渲染器绑成 `useXxx(selector)` 选择器 hook；
+  // 桩件里用 useSyncExternalStore 等价复刻（它正是选择器 hook 的底层）。
+  const useSettings = (selector) => selector(bundle.react.useSyncExternalStore(
+    injected.hooks.settings.subscribe,
+    () => injected.hooks.settings.getSnapshot(),
+  ));
+  return { document, bundle, host, card, injected, t, dict, dictFor, useSettings };
+}
+
+section("23. 详情页设置卡片（plugins.bundle.config）");
+{
+  const { bundle, host, injected, card, t, dictFor, useSettings } = await setupCard();
+
+  // ① 注册形状：这是"key 写错会静默不渲染"的唯一离线防线。
+  eq(card.opts.name, "plugins.bundle.config", "[23] 挂在官方插件页的设置槽位");
+  eq(card.opts.key, "dsh-codex-effort-slider", "[23] key = 包名（必须是它，否则页面静默不渲染）");
+  eq(card.opts.locale, "settings.codexEffortSlider", "[23] 声明了 locale 命名空间");
+  ok(host.effectLabels.some((l) => l.indexOf("settings dictionaries") >= 0), "[23] 词典经 ctx.effect 登记（随卸载释放）");
+
+  // ② 中英两套词条都要齐：缺一个语言就会在界面上露出键名。
+  const zhKeys = Object.keys(dictFor("zh")).sort();
+  const enKeys = Object.keys(dictFor("en")).sort();
+  ok(zhKeys.length > 0, "[23] 注册了中文词典");
+  eq(zhKeys.join(","), enKeys.join(","), "[23] 中英词条一一对应（键集合完全相同）");
+  for (const key of ["motionTitle", "motionQuick", "motionFull", "hideTitle", "ticksShow", "ticksHideReached", "ticksHideAll", "targetTitle", "targetDesc", "reachedTitle", "reachedDesc", "copyTrace", "restoreDefaults"]) {
+    ok(zhKeys.indexOf(key) >= 0, `[23] 词条含 ${key}`);
+  }
+
+  // ③ 注入面：卡片只拿到"读观察器 + 写回调"，不直接碰宿主服务。
+  ok(typeof injected.setSetting === "function", "[23] 注入 setSetting 写入口");
+  ok(typeof injected.restoreSettings === "function", "[23] 注入 restoreSettings 写入口");
+  ok(typeof injected.dumpTrace === "function", "[23] 注入 dumpTrace（复制诊断）");
+  ok(injected.hooks && injected.hooks.settings, "[23] hooks.settings 提供给渲染器绑成选择器 hook");
+  ok(typeof injected.hooks.settings.getSnapshot === "function", "[23] 观察器有 getSnapshot");
+  ok(typeof injected.hooks.settings.subscribe === "function", "[23] 观察器有 subscribe");
+
+  // ④ 观察器契约：快照总是完整设置；订阅可退订且退订后不再通知。
+  const snap = injected.hooks.settings.getSnapshot();
+  eq(Object.keys(snap).filter((k) => k !== "v").sort().join(","), "hideTicks,highlightReached,highlightTarget,motion", "[23] 快照含全部设置项");
+  let notified = 0;
+  const off = injected.hooks.settings.subscribe(() => { notified += 1; });
+  bundle.plugin.__internals.writeSettings({ motion: "quick" });
+  eq(notified, 1, "[23] 设置变化会通知订阅者");
+  off();
+  bundle.plugin.__internals.writeSettings({ motion: "full" });
+  eq(notified, 1, "[23] 退订之后不再通知（不会泄漏订阅）");
+
+  // ⑤ 真正挂载卡片：渲染出两个下拉框（两组选项）。
+  const props = Object.assign({}, injected, { t, view: "page", useSettings });
+  bundle.react.mount(card.Component, props, null);
+  await settle();
+  const tree = bundle.react.tree;
+  ok(tree !== null, "[23] 卡片渲染出根节点");
+  const buttons = tree.querySelectorAll ? tree.querySelectorAll("button") : [];
+  const selectButtons = Array.prototype.filter.call(buttons, (b) => b.className === "ces-card__select");
+  eq(selectButtons.length, 2, "[23] 两个下拉框（动画 / 隐藏）");
+  const titles = Array.prototype.map.call(
+    tree.querySelectorAll ? tree.querySelectorAll("div") : [],
+    (d) => d.className,
+  ).filter((c) => c === "ces-card__title");
+  eq(titles.length, 5, "[23] 五行各有一个标题（四项设置 + 「操作」）");
+
+  // ⑤b 卡片结构：两个设置项之间**不分隔**，只在「设置 → 动作」之间有一条线。
+  {
+    const kids = tree.children.map((c) => c.className);
+    eq(kids.filter((c) => c === "ces-card__rule").length, 1,
+      "[23] 只有一条分隔线（设置与动作之间）；几项设置之间不画线");
+    // 线的位置：必须是**最后一行设置之后、动作行之前**。
+    // ⚠️ 这里用结构推导而不是写死下标 —— 以后再增删设置项，这条断言不用改也依然成立，
+    //    而"线跑到设置中间去了"这类真错误仍会被抓住（动作行是最后一个 .ces-card__row）。
+    const rowIdxs = kids.map((c, i) => (c === "ces-card__row" ? i : -1)).filter((i) => i >= 0);
+    const ruleIdx = kids.indexOf("ces-card__rule");
+    eq(ruleIdx, rowIdxs[rowIdxs.length - 1] - 1,
+      "[23] 分隔线紧跟在最后一行设置之后、动作行之前");
+    // 动作行与设置项**同构**：复用 .ces-card__row，而不是自己的特例类。
+    eq(kids.filter((c) => c === "ces-card__row").length, 5,
+      "[23] 五行（四项设置 + 动作行）都用同一个 .ces-card__row");
+    eq(kids.indexOf("ces-card__actions"), -1, "[23] 已无 .ces-card__actions 特例类");
+  }
+
+  // ⑥ 下拉框显示的是"当前值的中文文案"，而不是原始 id。
+  eq(selectButtons[0].textContent, t("motionFull"), "[23] 动画默认显示「完整动画」");
+  eq(selectButtons[1].textContent, t("ticksShow"), "[23] 隐藏默认显示「显示」");
+
+  // ⑦ 点开下拉框 → 列出该组的全部选项（Menu 桩把 items 渲染成按钮）。
+  //    注意：测试台的假 DOM 只支持 `tag[attr="value"]` 形式的选择器，
+  //    所以这里按 class 过滤按钮，而不是用 `[data-menu-id]`。
+  const menuItemsOf = (root) => Array.prototype.filter.call(
+    root.querySelectorAll("button"),
+    (b) => b.className === "menu-stub__item",
+  );
+  selectButtons[0].handlers.onClick();
+  await settle();
+  const items = menuItemsOf(bundle.react.tree);
+  eq(items.length, 2, "[23] 点开后列出该组两个选项");
+  eq(Array.prototype.map.call(items, (i) => i.textContent).join(","), `${t("motionFull")},${t("motionQuick")}`, "[23] 选项顺序：默认值（完整动画）排第一");
+
+  // ⑧ 选一项 → 写入设置 + 关闭面板 + 下拉框文案跟着变。
+  //    选**第二项**（简洁动画），而不是写死"第一项" —— 顺序会变（默认值排前面），
+  //    但"选了就生效"这条语义不变。
+  eq(items[1].textContent, t("motionQuick"), "[23] 第二项是「简洁动画」");
+  items[1].handlers.onClick();
+  await settle();
+  eq(bundle.plugin.__internals.readSettings().motion, "quick", "[23] 选择后写入设置");
+  const afterButtons = Array.prototype.filter.call(
+    bundle.react.tree.querySelectorAll("button"),
+    (b) => b.className === "ces-card__select",
+  );
+  eq(afterButtons[0].textContent, t("motionQuick"), "[23] 下拉框文案切换成「简洁动画」");
+  eq(menuItemsOf(bundle.react.tree).length, 0, "[23] 选择后面板关闭");
+
+  // ⑨ 「恢复默认」把设置写回 schema 默认值。
+  const restoreBtn = Array.prototype.filter.call(
+    bundle.react.tree.querySelectorAll("button"),
+    (b) => b.textContent === t("restoreDefaults"),
+  )[0];
+  ok(restoreBtn !== undefined, "[23] 有「恢复默认」按钮");
+  restoreBtn.handlers.onClick();
+  await settle();
+  const restored = bundle.plugin.__internals.readSettings();
+  eq(restored.motion, "full", "[23] 恢复默认后动画回到 full");
+  eq(restored.hideTicks, "show", "[23] 恢复默认后隐藏回到 show");
+  eq(restored.highlightTarget, true, "[23] 恢复默认后目标回亮");
+  eq(restored.highlightReached, false, "[23] 恢复默认后已到达回不亮");
+
+  // ⑩ 复制诊断：没有剪贴板时给失败提示而不是抛错（卡片必须 fail-open）。
+  const copyBtn = Array.prototype.filter.call(
+    bundle.react.tree.querySelectorAll("button"),
+    (b) => b.textContent === t("copyTrace"),
+  )[0];
+  ok(copyBtn !== undefined, "[23] 有「复制诊断」按钮");
+  let threw = false;
+  try { copyBtn.handlers.onClick(); } catch (error) { threw = true; }
+  eq(threw, false, "[23] 无剪贴板时点诊断不抛错");
+  await settle();
+
+  // ⑩b 瞬时反馈（toast）必须是**行的水平兄弟**，不能挂在 .ces-card__rowText 里。
+  //
+  // 实机反馈过的缺陷：toast 原先放在 rowText 里（标题下方），一点按钮
+  // 那一列就多一行 → 整行变高 → 下面所有东西被顶下去（用户原话
+  // "点完多一行会变高然后位置会变"）。
+  // 正确形态：toast 与按钮同为 row 的直接孩子，只占宽度、不改行高。
+  {
+    const actionRow = bundle.react.tree.children[bundle.react.tree.children.length - 1];
+    ok(actionRow !== null, "[23] 动作行存在");
+    const kidCls = actionRow.children.map((c) => c.className);
+    ok(kidCls.includes("ces-card__rowText"), "[23] 动作行有左列（行名）");
+    ok(kidCls.includes("ces-card__toast"), "[23] toast 是动作行的直接孩子（水平兄弟，不塞进左列）");
+    const rowText = actionRow.children.find((c) => c.className === "ces-card__rowText");
+    eq(rowText.children.filter((c) => c.className === "ces-card__toast").length, 0,
+      "[23] toast 不在 rowText 里面（进去就会撑高整行）");
+    // toast 必须排在按钮**之前**（即「操作」的右边、按钮的左边）。
+    // 用「它的下标小于第一个按钮的下标」表达，而不是写一个恒真的条件。
+    const toastIdx = kidCls.indexOf("ces-card__toast");
+    const firstButtonIdx = actionRow.children.findIndex(
+      (c) => c.tagName === "BUTTON" || (Array.isArray(c.children) && c.children.some((k) => k.tagName === "BUTTON")),
+    );
+    ok(toastIdx >= 0 && firstButtonIdx >= 0 && toastIdx < firstButtonIdx,
+      `[23] toast 排在按钮之前（toast#${toastIdx} < button#${firstButtonIdx}）`);
+  }
+
+  // ⑩c toast 的三道 CSS 约束缺一不可（都是实测出来的，去掉任一就退回"行变高"）：
+  //   nowrap  → 不换行（换行必撑高行）
+  //   max-width → 不把左边的「操作」挤到折行
+  //   ellipsis + hidden → 超长截断，而不是推走右边的按钮
+  {
+    const css = bundle.plugin.__internals.CSS;
+    const body = /\.ces-card__toast\{([^}]*)\}/.exec(css);
+    ok(body !== null, "[23] 有 .ces-card__toast 规则");
+    if (body) {
+      ok(/white-space\s*:\s*nowrap/.test(body[1]), "[23] toast 不换行（nowrap）");
+      ok(/max-width\s*:\s*[^;}]+/.test(body[1]), "[23] toast 有 max-width（否则把行名挤到折行）");
+      ok(/text-overflow\s*:\s*ellipsis/.test(body[1]), "[23] toast 超长用省略号");
+      ok(/overflow\s*:\s*hidden/.test(body[1]), "[23] toast 截断（overflow:hidden）");
+    }
+    // 行名自己也不能折行：它一折，行就变高（这就是 max-width 要防的后果）。
+    const title = /\.ces-card__title\{([^}]*)\}/.exec(css);
+    ok(title !== null && /white-space\s*:\s*nowrap/.test(title[1]),
+      "[23] 行名不折行（否则被 toast 挤到折行时整行变高）");
+  }
+
+  // ⑩d 瞬时反馈的定时器：时长必须是命名常量，且**连点两次不能互相清掉**。
+  //
+  // 实机反馈过的缺陷：`showToast` 每次无条件新建定时器、不清上一个。
+  // 用虚拟时钟实测（第 1 次点击 t=2001、第 2 次 t=3801）：
+  //   第 2 条本应活到 5801ms，却在 **4501ms** 被第 1 条清空（只显示 700ms）。
+  // 这里在离线测试里用**可控假时钟**复现同一场景。
+  {
+    // 时长必须是命名常量 TOAST_MS，且取 3500（各家实现的中位）；不能是裸魔数。
+    const src = SOURCE;
+    ok(/var TOAST_MS = 3500;/.test(src), "[23] 反馈时长是命名常量 TOAST_MS = 3500");
+    ok(!/setToast\(""\)[^;]*,\s*2000\s*\)/.test(src), "[23] 不再有裸写的 2000 魔数");
+  }
+
+  // ⑪ 结构纪律：控件都走官方原语，没有自造的浮层 / 全局监听。
+  ok(bundle.react.tree.querySelectorAll(".ces-set").length === 0, "[23] 不再有自绘设置面板 .ces-set");
+  ok(CODE.indexOf("contextmenu") < 0, "[23] 源码里不再有右键监听");
+  ok(CODE.indexOf("longPressTimer") < 0, "[23] 源码里不再有长按监听");
+  ok(CODE.indexOf("openSettingsPanel") < 0, "[23] 源码里不再有自绘面板的打开函数");
+
+  // ⑫ 分隔线两侧留白必须相等（实机反馈过的缺陷：按钮行上内距 8px、其余块 16px，
+  //    线因此偏向一侧，看起来"上面松、下面紧"）。
+  //
+  // 这是**不变量**而不是某个具体值：线自身 margin:0，位置完全由相邻两块的
+  // padding 决定 —— 线在上方 = 上一块的 padding-bottom，线在下方 = 下一块的
+  // padding-top。所以只要相邻两块的上下内距都对称，线就恒居中。
+  // 离线测试台没有 CSS 引擎，量不到几何，因此直接审 CSS 源码本身。
+  {
+    const css = bundle.plugin.__internals.CSS;
+    /** 取某选择器的 padding 四值（简写展开）。返回 null 表示该规则没写 padding。 */
+    const paddingOf = (selector) => {
+      const m = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\{([^}]*)\\}`).exec(css);
+      if (!m) return null;
+      const p = /padding(?:-block)?\s*:\s*([^;}]+)/.exec(m[1]);
+      if (!p) return null;
+      const parts = p[1].trim().split(/\s+/).map((v) => parseFloat(v));
+      if (parts.some((v) => Number.isNaN(v))) return null;
+      if (parts.length === 1) return { top: parts[0], bottom: parts[0], raw: p[1].trim() };
+      if (parts.length === 2) return { top: parts[0], bottom: parts[0], raw: p[1].trim() };
+      if (parts.length === 3) return { top: parts[0], bottom: parts[2], raw: p[1].trim() };
+      return { top: parts[0], bottom: parts[2], raw: p[1].trim() };
+    };
+
+    // 卡片里**每一个**行块（现在只有 .ces-card__row 一种）都必须上下内距相等。
+    // 逐个把源码里出现的 ces-card__row* 规则都过一遍：只要将来有人再加一个
+    // "特例行类"，它要么复用这份 padding（通过），要么自己写一份（被下面这条拦住）。
+    const pad = paddingOf(".ces-card__row");
+    ok(pad !== null, "[23] .ces-card__row 声明了 padding（线两侧的留白全靠它）");
+    if (pad !== null) {
+      eq(pad.top, pad.bottom, `[23] .ces-card__row 上下内距相等（否则分隔线不居中）—— 实测 ${pad.raw}`);
+      eq(pad.top, 16, "[23] .ces-card__row 的留白 = 16px（与官方行距一致）");
+    }
+
+    // 不允许再出现"动作行的特例类"：它正是上一版不对称的根因。
+    ok(!/\.ces-card__actions\s*\{/.test(css),
+      "[23] 不再有 .ces-card__actions 特例类（动作行复用 .ces-card__row）");
+
+    // 线自身不能带 margin：带了就不再"由两侧 padding 决定位置"。
+    const ruleBody = /\.ces-card__rule\{([^}]*)\}/.exec(css);
+    ok(ruleBody !== null, "[23] 有 .ces-card__rule 规则");
+    if (ruleBody) {
+      ok(/margin\s*:\s*0/.test(ruleBody[1]), "[23] 分隔线 margin:0（位置由两侧 padding 决定，不自己撑开）");
+    }
+  }
+}
+
+section("24. 瞬时反馈的定时器：连点两次不许互相清掉");
+{
+  // 用**可控假时钟**跑，结论与机器快慢无关（真实等待会因定时器漂移越界，
+  // 我第一版确认脚本就是这么误判的）。
+  //
+  // 手法：`loadBundle` 把 setTimeout/clearTimeout 作为参数注入 bundle，
+  // 所以在装载前替换掉全局的它们，组件里的 `setTimeout` 就变成假实现。
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let vnow = 0;
+  let seq = 0;
+  const timers = new Map();
+  globalThis.setTimeout = (fn, ms) => { const id = ++seq; timers.set(id, { at: vnow + (Number(ms) || 0), fn }); return id; };
+  globalThis.clearTimeout = (id) => { timers.delete(id); };
+  function advance(ms) {
+    const target = vnow + ms;
+    for (;;) {
+      let pick = null, pickAt = Infinity;
+      for (const [id, t] of timers) if (t.at <= target && t.at < pickAt) { pickAt = t.at; pick = id; }
+      if (pick === null) break;
+      const t = timers.get(pick);
+      timers.delete(pick);
+      vnow = t.at;
+      t.fn();
+    }
+    vnow = target;
+  }
+
+  let bundle2;
+  try {
+    const document2 = createDocument();
+    bundle2 = loadBundle(BUNDLE, document2, {});
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+
+  const host2 = createFakeHost({});
+  bundle2.plugin.apply(host2.ctx);
+  const card2 = host2.registered.find((i) => i.opts && i.opts.name === "plugins.bundle.config");
+  const inj2 = card2.opts.inject();
+  const dict2 = host2.localeRegistrations.find((r) => r.ns === card2.opts.locale);
+  const zh2 = (dict2 && dict2.dictionaries.zh) || {};
+  const t2 = (k, v) => {
+    let r = zh2[k] !== undefined ? zh2[k] : k;
+    if (typeof r !== "string" || v === undefined || v === null) return r;
+    Object.keys(v).forEach((n) => { r = r.split("{" + n + "}").join(String(v[n])); });
+    return r;
+  };
+  bundle2.react.mount(card2.Component, Object.assign({}, inj2, {
+    t: t2, view: "page",
+    useSettings: (sel) => sel(inj2.hooks.settings.getSnapshot()),
+  }), null);
+  await settle();
+
+  /** 假 DOM 不支持 .class 选择器，按 className 递归找。 */
+  const byClass = (node, cls, out = []) => {
+    if (!node) return out;
+    if (node.className === cls) out.push(node);
+    for (const k of node.children || []) byClass(k, cls, out);
+    return out;
+  };
+  const toastText = () => {
+    const f = byClass(bundle2.react.tree, "ces-card__toast");
+    return f.length ? f[f.length - 1].textContent : null;
+  };
+  /** 当前 toast 节点（判 data-ok 与尾部图标用）。 */
+  const toastNode = () => byClass(bundle2.react.tree, "ces-card__toast")[0];
+  const toastIcons = () => byClass(bundle2.react.tree, "ces-card__toastIcon").map((n) => n.getAttribute("data-icon"));
+  const btn = (label) => Array.prototype.filter
+    .call(bundle2.react.tree.querySelectorAll("button"), () => true)
+    .find((b) => b.textContent === label);
+  const I2 = bundle2.plugin.__internals;
+  const TOAST_MS = 3500;
+  // 假时钟下，React 的微任务批渲染用**真实**微任务落定即可
+  const flush2 = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
+
+  const restore2 = btn(t2("restoreDefaults"));
+  const copy2 = btn(t2("copyTrace"));
+  ok(restore2 !== undefined && copy2 !== undefined, "[24] 找到两个动作按钮");
+
+  // ① 基线：单次点击精确活满 TOAST_MS
+  restore2.handlers.onClick();
+  await flush2();
+  eq(toastText(), t2("restored"), "[24] 点击后立即显示");
+  advance(TOAST_MS - 1); await flush2();
+  eq(toastText(), t2("restored"), `[24] ${TOAST_MS - 1}ms 时仍在（未到点）`);
+  advance(2); await flush2();
+  eq(toastText(), null, `[24] ${TOAST_MS + 1}ms 时已自行消失`);
+
+  // ② 连点两次：第 2 条不得被第 1 条的定时器清掉
+  restore2.handlers.onClick();
+  await flush2();
+  advance(1800); await flush2();
+  eq(toastText(), t2("restored"), "[24] 第 1 条在 1800ms 时仍在");
+  copy2.handlers.onClick();
+  await flush2();
+  const second = t2("copyFailed");
+  eq(toastText(), second, "[24] 第 2 条已显示");
+  // 走到第 1 条的到点时刻（第 2 条此时只活了 TOAST_MS-1800ms）——旧代码正是在这里被清空
+  advance(TOAST_MS - 1800 + 100); await flush2();
+  eq(toastText(), second, "[24] ★ 第 1 条的到点时刻，第 2 条仍在（旧代码在此被清掉）");
+  // 第 2 条自己活满后仍要消失
+  advance(1800 - 100 - 1); await flush2();
+  eq(toastText(), second, "[24] 第 2 条接近自己的到点时刻仍在");
+  advance(2); await flush2();
+  eq(toastText(), null, "[24] 第 2 条最终自行消失（不会永远挂着）");
+
+  // ③ 源码层面：必须有"先清旧定时器"这一步 + 卸载清理钩子
+  ok(/clearToastTimer\(\)/.test(SOURCE), "[24] showToast 里有 clearToastTimer()");
+  ok(/toastTimerRef/.test(SOURCE), "[24] 定时器句柄存在实例 ref 上（不是模块级）");
+  ok(/React\.useEffect\(function \(\) \{ return clearToastTimer; \}, \[\]\)/.test(SOURCE),
+    "[24] 卸载时取消定时器（否则已卸载组件仍会跑满时长）");
+  ok(!/var toastTimer = null;/.test(SOURCE),
+    "[24] 定时器句柄不是模块级变量（模块级会让两个卡片实例互相清掉对方的提示）");
+
+  // ④ 成功/失败的视觉区分：绿勾 vs 红叉，且状态必须来自**真实结果**。
+  //
+  // 「恢复默认」写盘成功 → 绿 + 勾；写盘失败 → 红 + 叉（不谎报）。
+  // 「复制诊断」剪贴板成功 → 绿 + 勾；失败 → 红 + 叉。
+  {
+    advance(TOAST_MS + 10); await flush2();   // 先让上一条散掉
+    restore2.handlers.onClick();
+    await flush2();
+    eq(toastNode().getAttribute("data-ok"), "1", "[24] 恢复默认（写盘成功）→ data-ok=1（绿）");
+    eq(toastIcons().join(","), "check", "[24] 成功时尾部是勾");
+    eq(toastText(), t2("restored"), "[24] 成功文案");
+
+    advance(TOAST_MS + 10); await flush2();
+    copy2.handlers.onClick();
+    await flush2();
+    eq(toastNode().getAttribute("data-ok"), "0", "[24] 剪贴板失败 → data-ok=0（红）");
+    eq(toastIcons().join(","), "close", "[24] 失败时尾部是叉（标准的那个关闭图标）");
+    eq(toastText(), t2("copyFailed"), "[24] 失败文案");
+
+    // 图标必须是 toast 的**内部孩子**，不能是行的第三个孩子 —— 后者会参与 flex
+    // 分配，把前两轮修好的「行高恒定 / 按钮位置恒定」又弄坏。
+    ok(toastNode().children.some((c) => c.className === "ces-card__toastIcon"),
+      "[24] 图标在 toast 元素内部（不是行的独立孩子，不影响行高与按钮位置）");
+    const actionRow = bundle2.react.tree.children[bundle2.react.tree.children.length - 1];
+    eq(actionRow.children.filter((c) => c.className === "ces-card__toastIcon").length, 0,
+      "[24] 动作行里没有裸的图标孩子（只有 toast 一个）");
+
+    // 颜色走官方语义令牌，不写死；绿灯令牌与 dpg 的链接校验勾是同一个。
+    const css2 = bundle2.plugin.__internals.CSS;
+    ok(/\.ces-card__toast\[data-ok='1'\]\{color:var\(--dsw-alias-state-success-primary\)\}/.test(css2),
+      "[24] 成功色 = --dsw-alias-state-success-primary（与 dpg 那个勾同令牌）");
+    ok(/\.ces-card__toast\[data-ok='0'\]\{color:var\(--dsw-alias-state-error-primary\)\}/.test(css2),
+      "[24] 失败色 = --dsw-alias-state-error-primary（官方报错色）");
+  }
+
+  // ⑤ 「恢复默认」必须用写盘的**真实结果**，不能无脑报成功。
+  {
+    ok(/var result = props\.restoreSettings\(\);/.test(SOURCE),
+      "[24] 恢复默认取 restoreSettings() 的返回值");
+    ok(/var ok = !!\(result && result\.ok\);/.test(SOURCE),
+      "[24] 按 result.ok 决定成功/失败");
+    ok(/showToast\(ok \? t\("restored"\) : t\("restoreFailed"\), ok\)/.test(SOURCE),
+      "[24] 失败时显示 restoreFailed 而不是谎报 restored");
+    // writeSettings 现在必须返回 { ok, settings }
+    ok(/return \{ ok: persisted, settings: next \};/.test(SOURCE),
+      "[24] writeSettings 返回 { ok, settings }");
+    ok(/persisted = false;/.test(SOURCE), "[24] 写盘异常会把 persisted 置 false");
+  }
+}
+
+section("25. 剪贴板的成功/失败两条路径都要走对（绿勾 vs 红叉）");
+{
+  // ⚠️ 这一节单独起场景，因为要注入 `navigator.clipboard`。
+  //    上一节的场景里没有 clipboard，`writeText` 那条路径**永远走不到** ——
+  //    所以把 reject 分支注入回归时测试依然全绿（实测过），说明断言漏了它。
+  const mountWithClipboard = async (clipboard) => {
+    const document3 = createDocument();
+    const bundle3 = loadBundle(BUNDLE, document3, { navigator: { clipboard } });
+    const host3 = createFakeHost({});
+    bundle3.plugin.apply(host3.ctx);
+    const card3 = host3.registered.find((i) => i.opts && i.opts.name === "plugins.bundle.config");
+    const inj3 = card3.opts.inject();
+    const dict3 = host3.localeRegistrations.find((r) => r.ns === card3.opts.locale);
+    const zh3 = (dict3 && dict3.dictionaries.zh) || {};
+    const t3 = (k, v) => {
+      let r = zh3[k] !== undefined ? zh3[k] : k;
+      if (typeof r !== "string" || v === undefined || v === null) return r;
+      Object.keys(v).forEach((n) => { r = r.split("{" + n + "}").join(String(v[n])); });
+      return r;
+    };
+    bundle3.react.mount(card3.Component, Object.assign({}, inj3, {
+      t: t3, view: "page", useSettings: (sel) => sel(inj3.hooks.settings.getSnapshot()),
+    }), null);
+    await settle();
+    const byClass3 = (node, cls, out = []) => {
+      if (!node) return out;
+      if (node.className === cls) out.push(node);
+      for (const k of node.children || []) byClass3(k, cls, out);
+      return out;
+    };
+    const btn3 = (label) => Array.prototype.filter
+      .call(bundle3.react.tree.querySelectorAll("button"), () => true)
+      .find((b) => b.textContent === label);
+    return { bundle3, byClass3, btn3, t3 };
+  };
+
+  // ① 剪贴板成功 → 绿 + 勾
+  {
+    const { bundle3, byClass3, btn3, t3 } = await mountWithClipboard({
+      writeText: () => Promise.resolve(),
+    });
+    btn3(t3("copyTrace")).handlers.onClick();
+    await settle();
+    await settle();
+    const node = byClass3(bundle3.react.tree, "ces-card__toast")[0];
+    ok(node !== undefined, "[25] 剪贴板成功 → 出现提示");
+    eq(node.getAttribute("data-ok"), "1", "[25] 剪贴板成功 → data-ok=1（绿）");
+    ok(/已复制诊断/.test(node.textContent), "[25] 文案是「已复制诊断…」");
+    eq(byClass3(bundle3.react.tree, "ces-card__toastIcon").map((n) => n.getAttribute("data-icon")).join(","),
+      "check", "[25] 剪贴板成功 → 尾部是勾");
+  }
+
+  // ② 剪贴板 reject → 红 + 叉（这条**必须**走 .then 的第二个回调，
+  //    而不是"没有 clipboard"的兜底分支 —— 两者文案相同，但只有这条验证了 reject 处理）
+  {
+    const { bundle3, byClass3, btn3, t3 } = await mountWithClipboard({
+      writeText: () => Promise.reject(new Error("denied")),
+    });
+    btn3(t3("copyTrace")).handlers.onClick();
+    await settle();
+    await settle();
+    const node = byClass3(bundle3.react.tree, "ces-card__toast")[0];
+    ok(node !== undefined, "[25] 剪贴板 reject → 出现提示");
+    eq(node.getAttribute("data-ok"), "0", "[25] 剪贴板 reject → data-ok=0（红）");
+    eq(byClass3(bundle3.react.tree, "ces-card__toastIcon").map((n) => n.getAttribute("data-icon")).join(","),
+      "close", "[25] 剪贴板 reject → 尾部是叉");
+  }
+
+  // ③ 剪贴板同步抛错 → 也要走失败（红叉），不能冒泡
+  {
+    const { bundle3, byClass3, btn3, t3 } = await mountWithClipboard({
+      writeText: () => { throw new Error("sync boom"); },
+    });
+    let threw = false;
+    try { btn3(t3("copyTrace")).handlers.onClick(); } catch (error) { threw = true; }
+    await settle();
+    eq(threw, false, "[25] 剪贴板同步抛错不冒泡出事件处理");
+    const node = byClass3(bundle3.react.tree, "ces-card__toast")[0];
+    ok(node !== undefined, "[25] 同步抛错 → 仍给出提示");
+    eq(node.getAttribute("data-ok"), "0", "[25] 同步抛错 → data-ok=0（红）");
+  }
+}
+
+section("26. 刻度点：目标 / 已到达解耦 + v3→v4 迁移 + 置灰联动");
+{
+  // 本节自带一份 bundle 实例：前面的 section 把各自的 bundle 关在块作用域里，
+  // 顶层没有可复用的那个（而且这里要的正是"从零读一遍设置"的干净状态）。
+  const bundle26 = loadBundle(BUNDLE, createDocument(), {});
+  const host26 = createFakeHost({});
+  bundle26.plugin.apply(host26.ctx);
+  const I = bundle26.plugin.__internals;
+
+  // ① 迁移（v3 的 reachedTicks 三态 → 新三字段）。这条最容易漏：新 schema 里
+  //    没有 reachedTicks，不走迁移就会被**静默丢掉**、落回默认，用户观感无声变化。
+  {
+    const m = I.migrateSettings;
+    ok(typeof m === "function", "[26] 有 migrateSettings 迁移函数");
+
+    const hl = I.normalizeSettings(m({ reachedTicks: "highlight", v: 3 }));
+    eq(hl.hideTicks, "show", "[26] highlight → 显示");
+    eq(hl.highlightTarget, true, "[26] highlight → 目标亮");
+    eq(hl.highlightReached, true, "[26] highlight → 已到达亮（复刻旧的累计高亮）");
+
+    const dm = I.normalizeSettings(m({ reachedTicks: "dim", v: 3 }));
+    eq(dm.hideTicks, "show", "[26] dim → 显示");
+    eq(dm.highlightTarget, false, "[26] dim → 都不亮");
+    eq(dm.highlightReached, false, "[26] dim → 都不亮");
+
+    const hd = I.normalizeSettings(m({ reachedTicks: "hidden", v: 3 }));
+    eq(hd.hideTicks, "hideReached", "[26] hidden → 隐藏已到达");
+    eq(hd.highlightTarget, true, "[26] hidden → 目标仍亮（修掉旧实现连目标一起藏的 bug）");
+    eq(hd.highlightReached, false, "[26] hidden → 已到达不亮");
+
+    // ⚠️ 迁移必须幂等：已经迁过的对象再进一次不能再变（否则每次读盘都漂移）。
+    const once = m({ reachedTicks: "highlight", v: 3 });
+    eq(JSON.stringify(m(once)), JSON.stringify(once), "[26] 迁移幂等（已迁过的不再动）");
+
+    // 没有旧字段时原样返回（不能凭空塞字段）。
+    const plain = { motion: "quick", v: 3 };
+    eq(JSON.stringify(m(plain)), JSON.stringify(plain), "[26] 无旧字段时不动输入");
+  }
+
+  // ①b **端到端迁移**：把 v3 原始 JSON 预置进 localStorage，再走真实的读盘路径
+  //     （readSettings → migrateSettings → normalizeSettings）。
+  //     只测 migrateSettings 函数**不够**：万一有人把 readSettings 里的调用改回
+  //     `normalizeSettings(parsed)`，上面的单测照样全绿（实测确认过这个假通过）。
+  {
+    const seeded = loadBundle(BUNDLE, createDocument(), {
+      settings: { reachedTicks: "hidden", v: 3 },
+    });
+    seeded.plugin.apply(createFakeHost({}).ctx);
+    const s = seeded.plugin.__internals.readSettings();
+    eq(s.hideTicks, "hideReached", "[26] 端到端：旧 v3 JSON 经真实读盘后 hideTicks=hideReached");
+    eq(s.highlightTarget, true, "[26] 端到端：旧 v3 的 hidden 迁移后目标仍亮");
+    eq(s.highlightReached, false, "[26] 端到端：旧 v3 的 hidden 迁移后已到达不亮");
+    eq(s.v, 4, "[26] 端到端：读盘后版本号升到 4");
+    // 迁移结果要**回写**盘，否则每次启动都要重迁一遍（且 v 永远是旧的）。
+    const written = JSON.parse(seeded.localStorage.getItem("dsh-codex-effort-slider.settings"));
+    eq(written.hideTicks, "hideReached", "[26] 端到端：迁移结果已回写 localStorage");
+    eq(written.reachedTicks, undefined, "[26] 端到端：旧键 reachedTicks 已被清除");
+  }
+
+  // ② 默认值：显示 + 只亮目标（用户最初要的效果）。
+  {
+    I.writeSettings({ hideTicks: "show", highlightTarget: true, highlightReached: false });
+    const s = I.readSettings();
+    eq(s.hideTicks, "show", "[26] 默认隐藏=显示");
+    eq(s.highlightTarget, true, "[26] 默认目标=亮");
+    eq(s.highlightReached, false, "[26] 默认已到达=不亮");
+  }
+
+  // ③ 渲染：**这是本次的核心回归锁** —— 默认只亮目标那一格，
+  //    其余已达的必须是 0（旧代码 `t <= shownIndex` 会把它们全点亮）。
+  //
+  //    ⚠️ 两个测试台的硬约束，决定了这里的写法：
+  //      1. `mount()` 只有一个根（currentRoot）→ 卡片与滑条**不能同时挂**；
+  //      2. `loadBundle()` 每次都给一套**新的** localStorage / window 桩
+  //         → 卡片和滑条必须在**同一个 bundle 实例**里，否则设置根本传不过去
+  //           （我第一版就是各起一个 bundle，结果设置改动对滑条完全不可见）。
+  //    所以：一次 loadBundle，交替 mount（挂卡片点开关 → 换挂滑条读属性）。
+  //    这正是真机的顺序：在详情页改设置 → 回输入框看滑条。
+  {
+    const document26 = createDocument();
+    const menu26 = createOfficialMenu(document26, { effortLabel: "Low" });
+    const bundle26b = loadBundle(BUNDLE, document26, {});
+    const host26b = createFakeHost({ effort: "low" });
+    bundle26b.plugin.apply(host26b.ctx);
+    const sliderEntry26 = host26b.registered.find(
+      (item) => item.opts && item.opts.name === "conversation.input.right",
+    );
+    ok(sliderEntry26 !== undefined, "[26] 注册了滑条槽位");
+    const card26 = host26b.registered.find((item) => item.opts && item.opts.name === "plugins.bundle.config");
+    const inj26 = card26.opts.inject();
+    const dict26 = host26b.localeRegistrations.find((r) => r.ns === card26.opts.locale);
+    const zh26 = (dict26 && dict26.dictionaries.zh) || {};
+    const t26 = (k, v) => {
+      let r = zh26[k] !== undefined ? zh26[k] : k;
+      if (typeof r !== "string" || v === undefined || v === null) return r;
+      Object.keys(v).forEach((n) => { r = r.split("{" + n + "}").join(String(v[n])); });
+      return r;
+    };
+    const useSettings26 = (sel) => sel(bundle26b.react.useSyncExternalStore(
+      inj26.hooks.settings.subscribe,
+      () => inj26.hooks.settings.getSnapshot(),
+    ));
+
+    /** 挂滑条，返回刻度点属性读取器。 */
+    const showSlider = async () => {
+      bundle26b.react.mount(sliderEntry26.Component, { sessionId: "session-abcdef" }, menu26.composer);
+      await settle();
+      const ticks = () => bundle26b.react.findAll("tick");
+      return {
+        attrs: (name) => ticks().map((n) => n.getAttribute(name)),
+        count: () => ticks().length,
+        /** 旋钮当前的 left（calc 形式），几何判定的期望值要用它。 */
+        knobLeft: () => {
+          const k = bundle26b.react.find("knob");
+          return k === null ? "" : k.style.left;
+        },
+      };
+    };
+    /** 挂卡片，返回操作句柄。 */
+    const showCard = async () => {
+      bundle26b.react.mount(card26.Component, Object.assign({}, inj26, {
+        t: t26, view: "page", useSettings: useSettings26,
+      }), null);
+      await settle();
+      const buttons = () => Array.prototype.filter.call(
+        bundle26b.react.tree.querySelectorAll("button"), () => true,
+      );
+      return {
+        switchByLabel: (label) => buttons().find((b) => b.getAttribute && b.getAttribute("aria-label") === label),
+        selectByLabel: (label) => buttons().find((b) => b.className === "ces-card__select" && b.getAttribute("aria-label") === label),
+        menuItem: (label) => buttons().find((b) => b.className === "menu-stub__item" && b.textContent === label),
+        buttonByText: (text) => buttons().find((b) => b.textContent === text),
+      };
+    };
+
+    // 默认（显示 + 只亮目标）
+    let slider = await showSlider();
+    const roles = slider.attrs("data-tick");
+    ok(slider.count() >= 4, `[26] 渲染出刻度点（实测 ${slider.count()}）`);
+    eq(roles.filter((r) => r === "target").length, 1, "[26] 目标角色唯一");
+    const lits = slider.attrs("data-lit");
+    eq(lits.filter((x) => x === "1").length, 1, "[26] ★ 只亮一格（旧代码会把已到达的全点亮）");
+    eq(slider.attrs("data-hide").every((x) => x === "0"), true, "[26] 默认都不隐藏");
+    const targetAt = roles.indexOf("target");
+    eq(roles.slice(0, targetAt).every((r) => r === "reached"), true, "[26] 目标之前都是「已到达」");
+    eq(roles.slice(targetAt + 1).every((r) => r === "ahead"), true, "[26] 目标之后都是「未到达」");
+
+    // 通过**卡片的开关**打开「高亮已到达」→ 滑条那边跟着变
+    let card = await showCard();
+    card.switchByLabel(t26("reachedTitle")).handlers.onClick();
+    await settle();
+    eq(inj26.hooks.settings.getSnapshot().highlightReached, true, "[26] 开关写入设置");
+    slider = await showSlider();
+    const lits2 = slider.attrs("data-lit");
+    ok(lits2.filter((x) => x === "1").length > 1, "[26] 打开已到达后亮的格数增多");
+    slider.attrs("data-tick").forEach((r, i) => {
+      if (r === "ahead") eq(lits2[i], "0", `[26] 未到达的第 ${i} 格不许亮`);
+      if (r === "reached") eq(lits2[i], "1", `[26] 已到达的第 ${i} 格应亮`);
+    });
+
+    // 切到「隐藏已到达」→ **旋钮左侧的点全隐**（含落在左侧的目标）
+    card = await showCard();
+    card.selectByLabel(t26("hideTitle")).handlers.onClick();
+    await settle();
+    card.menuItem(t26("ticksHideReached")).handlers.onClick();
+    await settle();
+    slider = await showSlider();
+    {
+      const roles3 = slider.attrs("data-tick");
+      const hides3 = slider.attrs("data-hide");
+      const lits3 = slider.attrs("data-lit");
+      // 用**几何位置**算期望值（与实现同一套判据，但独立算一遍）：
+      // 刻度点在轨道上的 pct 与旋钮当前 pct 比，≤ 旋钮就算"已过"。
+      //
+      // ⚠️ 必须带容差：旋钮的 `left` 是 `calc(14px + 0.3333 * (...))` 形式，
+      //    pct 被 `Math.round(pct*10000)/10000` **截到 4 位小数**；
+      //    而实现内部用的是全精度 `shownPct`。旋钮正好停在某一档上时两者
+      //    会差 ~3e-5，直接比较会把"恰好相等"判反（实测踩过）。
+      const EPS = 1e-4;
+      const count = roles3.length;
+      const knobPct = Number(/\+ ([\d.]+) \*/.exec(String(slider.knobLeft()))[1]);
+      const pcts = [];
+      for (let t = 0; t < count; t += 1) pcts.push(I.pctFromIndex(t, count));
+      roles3.forEach((role, i) => {
+        const passed = pcts[i] <= knobPct + EPS;
+        eq(hides3[i], passed ? "1" : "0",
+          `[26] 隐藏已到达：第 ${i} 格（${role}，pct=${pcts[i].toFixed(4)} vs 旋钮 ${knobPct.toFixed(4)}）${passed ? "应隐藏" : "不该隐藏"}`);
+        if (passed) eq(lits3[i], "0", `[26] 被隐藏的第 ${i} 格不许亮（lit 不能与 hide 同时为 1）`);
+      });
+      // 这条是本次修的 bug：目标落在旋钮**左侧**时，旧实现在 hideReached 下仍让它
+      // 豁免隐藏（因为判据是 `t < shownIndex` 而不是位置），于是左侧残留一个点。
+      const leftVisible = roles3.filter((r, i) => hides3[i] === "0" && pcts[i] <= knobPct + EPS);
+      eq(leftVisible.length, 0, "[26] ★ 旋钮左侧没有残留的可见点（旧实现会留下一个）");
+    }
+
+    // 置灰联动：hideTicks != show 时「已到达」置灰，但存储值保留
+    card = await showCard();
+    eq(card.switchByLabel(t26("reachedTitle")).disabled, true, "[26] 隐藏已到达 → 「已到达」开关置灰");
+    eq(inj26.hooks.settings.getSnapshot().highlightReached, true, "[26] 置灰不改存储值（用户选择被保住）");
+    eq(card.switchByLabel(t26("targetTitle")).disabled, false, "[26] 隐藏已到达时「目标」开关仍可用");
+
+    // 切到「全部隐藏」→ 两个开关都置灰、每一格都隐藏
+    card.selectByLabel(t26("hideTitle")).handlers.onClick();
+    await settle();
+    card.menuItem(t26("ticksHideAll")).handlers.onClick();
+    await settle();
+    card = await showCard();
+    eq(card.switchByLabel(t26("targetTitle")).disabled, true, "[26] 全部隐藏 → 「目标」也置灰");
+    slider = await showSlider();
+    eq(slider.attrs("data-hide").every((x) => x === "1"), true, "[26] 全部隐藏 → 每一格都隐藏");
+
+    // 恢复默认 → 显示 + 只亮目标
+    // ⚠️ 必须先重新挂卡片：上面 showSlider() 已经把根换成了滑条，
+    //    而 card 句柄里的 buttons() 读的是**当前**树 —— 不重挂就会拿到滑条的按钮。
+    card = await showCard();
+    card.buttonByText(t26("restoreDefaults")).handlers.onClick();
+    await settle();
+    eq(inj26.hooks.settings.getSnapshot().hideTicks, "show", "[26] 恢复默认 → 隐藏=显示");
+    eq(inj26.hooks.settings.getSnapshot().highlightReached, false, "[26] 恢复默认 → 已到达不亮");
+    slider = await showSlider();
+    eq(slider.attrs("data-lit").filter((x) => x === "1").length, 1, "[26] 恢复默认后回到只亮一格");
+  }
+
+  // ③b **本次修的 bug 的定点复现**：旋钮停在两档之间、最近档位落在旋钮**左侧**时，
+  //     旧实现按 `t < shownIndex` 判定"已到达"，于是那一格（角色=target）豁免隐藏，
+  //     在 hideReached 下**左侧残留一个点**（用户看到的就是"目标强制显示已到达的"）。
+  //     新实现按几何位置判定，所以左侧必须干净。
+  {
+    const W = 300;
+    const doc = createDocument();
+    const menu = createOfficialMenu(doc, {});
+    const b = loadBundle(BUNDLE, doc, {});
+    const h = createFakeHost({ effort: "low" });
+    b.plugin.apply(h.ctx);
+    b.plugin.__internals.writeSettings({
+      hideTicks: "hideReached", highlightTarget: true, highlightReached: false,
+    });
+    b.react.mount(sliderEntry(h).Component, { sessionId: "session-abcdef" }, menu.composer);
+    await settle();
+
+    const track = b.react.find("track");
+    track.rect = { left: 0, top: 0, right: W, bottom: 28, width: W, height: 28 };
+    // 4 档：Low=1/3≈0.333、High=2/3≈0.667。拖到 0.42 → 最近档位是 Low，
+    // 而 Low 的物理位置（0.333）在旋钮（0.42）**左侧**。
+    const KNOB_RADIUS = b.plugin.__internals.KNOB_RADIUS;
+    const clientX = KNOB_RADIUS + 0.42 * (W - 2 * KNOB_RADIUS);
+    track.fire("onPointerDown", { clientX, pointerId: 1 });
+    for (let i = 0; i < 120; i += 1) {
+      const ran = b.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      if (ran === 0) break;
+    }
+    await settle();
+
+    const knobCss = b.react.find("knob").style.left;
+    const knobPct = Number(/\+ ([\d.]+) \*/.exec(String(knobCss))[1]);
+    const ticks = b.react.findAll("tick");
+    const roles = ticks.map((n) => n.getAttribute("data-tick"));
+    const hides = ticks.map((n) => n.getAttribute("data-hide"));
+    const lits = ticks.map((n) => n.getAttribute("data-lit"));
+    const pcts = ticks.map((n, i) => b.plugin.__internals.pctFromIndex(i, ticks.length));
+
+    console.log(`    （旋钮 pct=${knobPct.toFixed(3)}；各格 pct=${pcts.map((p) => p.toFixed(3)).join(", ")}；角色=${roles.join(",")}）`);
+    ok(roles.indexOf("target") >= 0, "[26b] 存在目标格");
+    const targetIdx = roles.indexOf("target");
+    ok(pcts[targetIdx] <= knobPct, "[26b] 前提：目标格确实落在旋钮左侧（否则这条测不到）");
+    eq(hides[targetIdx], "1", "[26b] ★ 目标落在旋钮左侧时，hideReached 下必须隐藏它");
+    eq(lits[targetIdx], "0", "[26b] ★ 被隐藏的目标不许 lit=1");
+    // 左侧全部隐藏、右侧保留
+    roles.forEach((role, i) => {
+      eq(hides[i], pcts[i] <= knobPct ? "1" : "0",
+        `[26b] 第 ${i} 格（左=${pcts[i] <= knobPct}）隐藏状态正确`);
+    });
+    eq(hides.filter((x) => x === "1").length > 0, true, "[26b] 确实隐藏了一些格");
+  }
+
+  // ④b 降级纪律：取不到官方 Switch 就不注册卡片（否则会渲染出"有标签没控件"的空行）。
+  //     这条只能靠**故意抽掉原语**来验证 —— 否则把门禁里的 `Switch === null` 删掉也全绿。
+  {
+    const b = loadBundle(BUNDLE, createDocument(), { omitPrimitives: ["Switch"] });
+    const h = createFakeHost({});
+    b.plugin.apply(h.ctx);
+    eq(h.registered.some((i) => i.opts && i.opts.name === "plugins.bundle.config"), false,
+      "[26] 缺 Switch 原语 → 不注册设置卡片（降级）");
+    // 但滑条那一条必须照常注册（原语缺失不能把滑条拖下水）。
+    eq(h.registered.some((i) => i.opts && i.opts.name === "conversation.input.right"), true,
+      "[26] 缺 Switch 原语 → 滑条照常注册（不受卡片降级影响）");
+  }
+
+  // ④ CSS 只剩两条刻度规则（判定全在 JS；旧的选择器组合已删除）
+  {
+    const css = I.CSS;
+    eq(/\.ces-inline\[data-reached-ticks=/.test(css), false, "[26] 旧的 data-reached-ticks 组合选择器已删除");
+    eq(css.indexOf(".ces-tick[data-lit='1']") > 0, true, "[26] 有 data-lit 规则");
+    eq(css.indexOf(".ces-tick[data-hide='1']") > 0, true, "[26] 有 data-hide 规则");
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */

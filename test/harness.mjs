@@ -422,6 +422,14 @@ export function createReactStub() {
       }
       if (key.startsWith("on") && typeof value === "function") { node.handlers[key] = value; continue; }
       if (key === "className") { node.className = value; node.setAttribute("class", value); continue; }
+      // 布尔 DOM 属性要**同时**落成属性与 attribute，与真 DOM 的反射语义一致：
+      // `btn.disabled = true` 既让 `.disabled === true`，也让 attribute 出现。
+      // 只写 attribute 的话断言里读 `.disabled` 会是 undefined（假失败/假通过都踩过）。
+      if (key === "disabled" || key === "checked" || key === "readOnly") {
+        node[key] = value === true;
+        if (value === true) node.setAttribute(key, ""); else node.attributes.delete(key);
+        continue;
+      }
       if (value === undefined || value === null || value === false) continue;
       if (value === true) { node.setAttribute(key, ""); continue; }
       node.setAttribute(key, value);
@@ -637,6 +645,10 @@ export function createFakeHost(options = {}) {
 
   const registered = [];
   const subscriptions = [];
+  /** 设置卡片注册的 locale 词典（断言中英齐全用）。 */
+  const localeRegistrations = [];
+  /** effect 的标签（断言"设置词典确实登记过 cleanup"这类事实）。 */
+  const effectLabels = [];
   const ctx = {
     /** 监视宿主事件订阅：本插件应当**一次都不订阅**（这是"不注入消息"的结构性证据）。 */
     on: (name, ...rest) => {
@@ -661,6 +673,21 @@ export function createFakeHost(options = {}) {
         return { dispose() {} };
       },
     },
+    /**
+     * 官方 locale 服务的桩：设置卡片用 `ctx.locale.register(ns, {zh, en})` 注册自己的词典。
+     * 记录每次注册，测试可以断言"中英两套词条都齐"。
+     */
+    locale: {
+      register: (ns, dictionaries) => {
+        localeRegistrations.push({ ns, dictionaries });
+        return { dispose() {} };
+      },
+    },
+    /** effect 在桩里同步执行一次（真宿主按 fiber 生命周期管理）。 */
+    effect: (callback, label) => {
+      effectLabels.push(String(label));
+      try { return callback(); } catch (error) { return undefined; }
+    },
   };
 
   return {
@@ -671,6 +698,8 @@ export function createFakeHost(options = {}) {
     loads,
     registered,
     subscriptions,
+    localeRegistrations,
+    effectLabels,
     get directoryForCalls() { return directoryForCalls; },
   };
 }
@@ -687,6 +716,11 @@ export function loadBundle(bundlePath, document, options = {}) {
   let registration = null;
   /** MutationObserver 桩：只记录回调，由测试显式触发（这样扫描是确定性的，不靠计时）。 */
   const observers = [];
+  /** 假时钟（毫秒）：rAF 帧时间戳与 performance.now 都读它，保证测试完全确定。 */
+  let clock = 0;
+  /** 待执行的 rAF 回调队列（flushFrames 消费）。 */
+  const frameQueue = [];
+  function clockNow() { return clock; }
   function MutationObserverStub(callback) {
     this.callback = callback;
     this.targets = [];
@@ -696,19 +730,60 @@ export function loadBundle(bundlePath, document, options = {}) {
   MutationObserverStub.prototype.disconnect = function disconnect() { this.targets.length = 0; };
   MutationObserverStub.prototype.trigger = function trigger() { this.callback([]); };
 
+  /**
+   * 假 window 上的事件表。
+   *
+   * 必须是真的可订阅 / 可派发：设置卡片与滑条都靠 `SETTINGS_EVENT` 广播来同步
+   * （`writeSettings` 派发、两边监听），桩成空操作会让"设置变了有没有人收到"这件事
+   * 永远测不出来 —— 那正是最该被守住的一条。
+   */
+  const windowListeners = new Map();
   const window = {
     __ModuleLoader__: {
       load(reg) { registration = reg; },
     },
     innerWidth: 1280,
     innerHeight: 800,
-    addEventListener() {},
-    removeEventListener() {},
-    dispatchEvent() {},
+    addEventListener(type, listener) {
+      if (!windowListeners.has(type)) windowListeners.set(type, new Set());
+      windowListeners.get(type).add(listener);
+    },
+    removeEventListener(type, listener) {
+      const set = windowListeners.get(type);
+      if (set) set.delete(listener);
+    },
+    dispatchEvent(event) {
+      const type = event && event.type;
+      const set = type ? windowListeners.get(type) : undefined;
+      if (!set) return true;
+      for (const listener of [...set]) {
+        try { listener(event); } catch (error) { /* 单个订阅者抛错不传染 */ }
+      }
+      return true;
+    },
+    CustomEvent: function FakeCustomEvent(type) { this.type = type; },
     Event: function FakeEvent(type) { this.type = type; },
     MutationObserver: MutationObserverStub,
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (handle) => clearInterval(handle),
+    /**
+     * **可控的 requestAnimationFrame 桩**。
+     *
+     * 连续运动引擎靠帧循环推进；真实 rAF 由浏览器调度，离线测试里既不存在、
+     * 也无法确定性地断言"第 N 帧的位置"。所以这里把它做成**手动泵**：
+     * 回调入队，由测试用 flushFrames() 显式推进固定步长。
+     *
+     * 这样引擎的每条性质（连续性、零过冲、收敛）都能用**固定 dt** 精确验证，
+     * 不依赖真实时钟 —— 这正是这次改造能离线证明"不咯裂"的前提。
+     */
+    requestAnimationFrame(callback) {
+      frameQueue.push({ callback, cancelled: false });
+      return frameQueue.length; // 句柄 = 队列下标（1 起）
+    },
+    cancelAnimationFrame(handle) {
+      const entry = frameQueue[handle - 1];
+      if (entry) entry.cancelled = true;
+    },
     /** 只实现本插件会查的那条媒体查询（系统「减少动态效果」）。 */
     matchMedia(query) {
       return {
@@ -719,23 +794,168 @@ export function loadBundle(bundlePath, document, options = {}) {
       };
     },
   };
+  /**
+   * 推进 `count` 帧，每帧步长 `dtMs` 毫秒。
+   * 语义与真实 rAF 一致：**只执行本帧开始时已入队的回调**，回调里新排的帧留到下一轮。
+   * 返回实际执行的帧数。
+   */
+  function flushFrames(count = 1, dtMs = 16) {
+    let executed = 0;
+    for (let i = 0; i < count; i += 1) {
+      const batch = frameQueue.splice(0, frameQueue.length);
+      const live = batch.filter((entry) => !entry.cancelled);
+      if (live.length === 0) break;
+      for (const entry of live) entry.callback(clockNow());
+      clock += dtMs; // 时间只在**帧执行后**前进，与真实 rAF 的时间戳语义一致
+      executed += 1;
+    }
+    return executed;
+  }
+  /** 手动推进时钟（毫秒），让"指针速度"这类基于时间的量可控。 */
+  function advanceClock(ms) { clock += ms; return clock; }
+  /** 当前假时钟值（毫秒）。 */
+  function clockNow() { return clock; }
   const code = readFileSync(bundlePath, "utf8");
+  /**
+   * localStorage 桩 —— **必须有**。
+   *
+   * 设置的真实存储就是它（`readSettings` / `writeSettings` 都走 `localStorage`）。
+   * 没有它时 `writeSettings` 只改内存缓存，而"设置广播 → 丢缓存"这一条会把值打回默认，
+   * 于是"改设置 → 读回来"的断言会假失败。真宿主里它一直存在，桩件不能比真宿主更弱。
+   */
+  const storageMap = new Map();
+  /**
+   * 预置的持久化设置（可选）。
+   *
+   * 用来测**端到端迁移**：先在盘上放一份旧版本 JSON，再让产品自己去读。
+   * 只调 `migrateSettings()` 单测是不够的 —— 那样测不出"readSettings 有没有
+   * 真的调用它"，把调用改掉单测照样全绿（实测踩过这个假通过）。
+   */
+  if (options.settings !== undefined) {
+    storageMap.set("dsh-codex-effort-slider.settings", JSON.stringify(options.settings));
+  }
+  const localStorageStub = {
+    getItem: (key) => (storageMap.has(String(key)) ? storageMap.get(String(key)) : null),
+    setItem: (key, value) => { storageMap.set(String(key), String(value)); },
+    removeItem: (key) => { storageMap.delete(String(key)); },
+    clear: () => { storageMap.clear(); },
+  };
   // 只给这个 bundle 传它真正依赖的宿主全局；其余走真实全局（Promise/Set/Math/Date…）。
-  const run = new Function("window", "document", "console", "setTimeout", "clearTimeout", code);
-  run(window, document, console, setTimeout, clearTimeout);
+  // performance 单独传**假时钟**：引擎的"指针速度/松手外推"都读它，必须可控。
+  const performanceStub = { now: () => clockNow() };
+  /**
+   * navigator 桩：默认就用 Node 的真实 navigator（它没有 clipboard），
+   * 但允许调用方注入一个带 `clipboard.writeText` 的版本 —— 否则
+   * "剪贴板 reject" 这条路径在离线测试里**永远走不到**（实测过：注入回归
+   * 到那条分支，测试全绿，说明断言根本没覆盖它）。
+   */
+  const navigatorStub = options.navigator ?? globalThis.navigator ?? {};
+  const run = new Function("window", "document", "console", "setTimeout", "clearTimeout", "performance", "localStorage", "navigator", code);
+  run(window, document, console, setTimeout, clearTimeout, performanceStub, localStorageStub, navigatorStub);
   if (registration === null) throw new Error("bundle 没有调用 window.__ModuleLoader__.load()");
   const react = createReactStub();
+  /**
+   * 官方 UI 原语的桩件。
+   *
+   * 真宿主里这些来自 `@deepseek-ai/dsh-client-ui-primitives`（Module Loader 形态的插件
+   * 隐式拿到它，直接 `require` 即可）。桩件只需要**能被查询到形状**：
+   *   · `Menu`  —— 渲染 anchor；打开时把 items 渲染成带 `data-menu-id` 的按钮。
+   *   · `Button` —— 一个普通 button（onClick 直通）。
+   *   · 图标     —— 一个 svg（只做结构占位）。
+   */
+  const primitives = {
+    Menu(props) {
+      const children = [props.anchor ?? null];
+      if (props.open === true) {
+        const items = Array.isArray(props.items) ? props.items : [];
+        children.push(react.createElement("div", { className: "menu-stub__list", key: "list" },
+          items.map((item) => react.createElement("button", {
+            type: "button",
+            key: String(item.id),
+            className: "menu-stub__item",
+            "data-menu-id": String(item.id),
+            "data-selected": props.selectedId === item.id ? "1" : "0",
+            onClick: () => { if (typeof props.onSelect === "function") props.onSelect(item.id); },
+          }, String(item.label))),
+        ));
+      }
+      return react.createElement("span", { className: "menu-stub" }, children);
+    },
+    Button(props) {
+      // 注意：children 必须走 createElement 的**变参**传下去。
+      // 放进 props 对象是无效的 —— createElement 会用变参重建 `normalized.children`，
+      // 于是按钮渲染成空标签，"按文案找按钮"的断言永远找不到
+      // （不是产品 bug，是桩件的 bug）。
+      const { variant, disabled, onClick, children, ...rest } = props ?? {};
+      return react.createElement("button", {
+        type: "button",
+        // variant 是真原语的样式开关，桩件只要不把它漏成 DOM 属性即可。
+        ...(disabled === true ? { disabled: "" } : {}),
+        onClick,
+        ...rest,
+      }, children);
+    },
+    IconChevronDownOutlineRegular(props) {
+      return react.createElement("svg", props ?? {});
+    },
+    /**
+     * 瞬时反馈尾部的两个图标（成功勾 / 失败叉）。
+     *
+     * ⚠️ 这两个**必须提供**，否则产品里 `IconCheckOutlineRegular === null` 的降级分支
+     * 会把图标整个跳过 —— 于是"有没有渲染图标"的断言会永远看不到图标，
+     * 变成假通过（我第一版就是这么漏掉的）。名字按宿主 asar 里的真实导出名。
+     */
+    IconCheckOutlineRegular(props) {
+      return react.createElement("svg", Object.assign({ "data-icon": "check" }, props ?? {}));
+    },
+    IconCloseOutlineRegular(props) {
+      return react.createElement("svg", Object.assign({ "data-icon": "close" }, props ?? {}));
+    },
+    /**
+     * 官方 Switch 桩，签名与宿主交付一致：
+     *   `Switch({ checked, onChange, label, disabled })` → `<button role="switch" aria-checked>`
+     *   **`onChange` 收到新值**（真实现是 `onClick: () => onChange(!checked)`）。
+     *
+     * 必须提供：产品里 `Switch === null` 会走"跳过设置卡片"的降级分支，
+     * 那样两个高亮开关根本不会渲染，相关断言会全部失去意义（假通过）。
+     */
+    Switch(props) {
+      const { checked, onChange, label, disabled, ...rest } = props ?? {};
+      return react.createElement("button", Object.assign({
+        type: "button",
+        role: "switch",
+        "aria-checked": checked === true,
+        "aria-label": label,
+        "data-switch": checked === true ? "1" : "0",
+        // 布尔属性按真 DOM 语义挂（renderElement 会写成 DOM 属性而非 attribute）。
+        disabled: disabled === true,
+        // ⚠️ 必须把 onChange 转成 onClick 挂上去：只解构不接的话，
+        //    测试里 `node.handlers.onClick` 不存在，点开关会直接抛错
+        //    （而且"开关点了没反应"会被误读成产品缺陷）。
+        //    真实现的语义是 `onClick: () => onChange(!checked)` —— 传**新值**。
+        onClick: typeof onChange === "function" ? () => onChange(checked !== true) : undefined,
+      }, rest), null);
+    },
+  };
+  // 允许测试**故意抽掉**某个原语，用来验证产品的降级路径。
+  // 没有这个口子的话，"取不到 Switch 就跳过卡片"这条纪律根本没法离线验证
+  // —— 去掉门禁里的 `Switch === null` 也会全绿（实测确认过）。
+  for (const name of options.omitPrimitives ?? []) delete primitives[name];
   const plugin = registration.factory((spec) => {
     if (spec === "react") return react;
     // 真宿主里 react-dom 是平台种子词；桩件只要 createPortal（组件唯一的用法）。
     if (spec === "react-dom") return { createPortal: react.createPortal };
+    if (spec === "@deepseek-ai/dsh-client-ui-primitives") return primitives;
     throw new Error(`测试台没有为 require(${JSON.stringify(spec)}) 准备桩件`);
   });
   /** 触发所有 MutationObserver 桩（等价于"官方菜单刚出现"）。 */
   const flushObservers = () => {
     for (const observer of observers) observer.trigger();
   };
-  return { registration, plugin, react, window, document, observers, flushObservers };
+  return {
+    registration, plugin, react, window, document, observers, flushObservers,
+    flushFrames, advanceClock, clockNow, localStorage: localStorageStub,
+  };
 }
 
 /** 让微任务、渲染和 promise 链都落定。 */

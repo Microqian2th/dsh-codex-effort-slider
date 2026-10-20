@@ -39,6 +39,13 @@ function eq(actual, expected, label) {
   ok(same, same ? label : `${label}（期望 ${JSON.stringify(expected)}，实际 ${JSON.stringify(actual)}）`);
 }
 
+/** 数组/对象逐项相等（`eq` 用的是 `Object.is`，数组永远不等，故单列一个）。 */
+function eqj(actual, expected, label) {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  ok(a === b, a === b ? label : `${label}（期望 ${b}，实际 ${a}）`);
+}
+
 function near(actual, expected, label, tolerance = 1e-6) {
   const same = typeof actual === "number" && Math.abs(actual - expected) <= tolerance;
   ok(same, same ? label : `${label}（期望 ≈${expected}，实际 ${actual}）`);
@@ -1702,6 +1709,104 @@ section("52. 三组动画参数都必须稳定（不许 bang-bang 自激振荡�
   // ③ 把发病参数写进测试：它必须被判据拦住（说明判据真的能防住这个 bug）
   const BAD = { K: 120, A: 600, k: 200, amax: 1200, vmax: 20 };
   ok(BAD.amax / 60 > 0.5 * BAD.vmax, "[52] 1.1.2 的旧简洁参数不满足稳定判据（正是 issue #12 的根因）");
+}
+
+section("53. 档位必须按**强度**排序（位置 = 强度）—— Qoder CN 目录原序回归");
+{
+  const I = (await setup()).internals;
+  const ids = (levels) => levels.map((l) => l.id);
+  const L = (list) => list.map((id) => ({ id, name: id }));
+
+  // ① 直接命中 bug：Qoder CN `dfmodel` 的真实下发顺序（目录原序 + 追加的 none）
+  eqj(ids(I.sortLevelsByStrength(L(["high", "max", "low", "none"]))), ["none", "low", "high", "max"], "[53] `高/最大/低/关闭思考` → `关闭思考/低/高/最大`（关闭思考回最左，max 在 high 右边）");
+
+  // ② 目录原序的其它真实反例
+  eqj(ids(I.sortLevelsByStrength(L(["high", "low", "max"]))), ["low", "high", "max"], "[53] `高/低/最大` → `低/高/最大`（GLM-5.3 / Kimi 的原序）");
+  eqj(ids(I.sortLevelsByStrength(L(["xhigh", "low", "medium", "none"]))), ["none", "low", "medium", "xhigh"], "[53] `极高/低/中/关闭思考` → `关闭思考/低/中/极高`（Qwen3.8 的原序）");
+
+  // ③ 未登记 id 排末尾、彼此保持原序；已登记在前
+  eqj(ids(I.sortLevelsByStrength(L(["max", "turbo", "low", "zen"]))), ["low", "max", "turbo", "zen"], "[53] 未登记 id 排末尾并保持原相对顺序");
+
+  // ④ **零行为变化**：全是未登记 id 时输出与输入逐项相同
+  eqj(ids(I.sortLevelsByStrength(L(["alpha", "beta", "gamma"]))), ["alpha", "beta", "gamma"], "[53] 全部未登记 → 原序不变（对未知 provider 无行为变化");
+
+  // ⑤ 同排名稳定：off/none、high/on 各自保持目录里的先后
+  eqj(ids(I.sortLevelsByStrength(L(["none", "off", "low"]))), ["none", "off", "low"], "[53] off / none 同排名 → 保持原相对顺序（稳定排序）");
+  eqj(ids(I.sortLevelsByStrength(L(["on", "high", "max"]))), ["on", "high", "max"], "[53] high / on 同排名 → 保持原相对顺序（稳定排序）");
+
+  // ⑥ 幂等 + 不改入参
+  const input = L(["high", "max", "low", "none"]);
+  const frozen = JSON.stringify(input);
+  const once = I.sortLevelsByStrength(input);
+  eq(JSON.stringify(input), frozen, "[53] 不改动传入的数组");
+  eq(JSON.stringify(ids(I.sortLevelsByStrength(once))), JSON.stringify(ids(once)), "[53] 排序是幂等的");
+
+  // ⑦ 边界：空数组 / 非数组 / 单档
+  eq(I.sortLevelsByStrength([]).length, 0, "[53] 空数组 → 空数组");
+  eq(I.sortLevelsByStrength(null).length, 0, "[53] 非数组 → 空数组（不抛错）");
+  eqj(ids(I.sortLevelsByStrength(L(["none"]))), ["none"], "[53] 单档原样返回");
+
+  // ⑧ 端到端：真组件在 Qoder CN 数据上，`关闭思考` 必须落在最左、`max` 在最右
+  const CN = {
+    id: "dfmodel",
+    name: "DeepSeek-Flash",
+    reasoning: {
+      defaultEffort: "max",
+      efforts: L(["high", "max", "low", "none"]).map((l) => ({
+        id: l.id,
+        name: { high: "高", max: "最大", low: "低", none: "关闭思考" }[l.id],
+      })),
+    },
+  };
+  const d = await setup({ host: { model: CN } });
+  const ticks = d.react.findAll("tick");
+  eq(ticks.length, 4, "[53] 四个档位都还在（排序不丢档）");
+  const trackNode = d.react.find("track");
+  eq(trackNode.getAttribute("aria-valuetext"), "最大", "[53] 当前档位仍是「最大」（按 id 找，不按位置）");
+  // max 现在在最右 → 满能量；这正是不排序时做不到的
+  eq(d.react.find("root").style["--ces-energy"], "1", "[53] 最大档在最右 → 能量拉满");
+  // 第一个刻度是「关闭思考」所在的 pct=0（旋钮贴左端）
+  eq(ticks[0].style.left, I.knobOffsetOf(0), "[53] 最左刻度就是「关闭思考」的位置");
+  eq(ticks[3].style.left, I.knobOffsetOf(1), "[53] 最右刻度就是「最大」的位置");
+
+  /* ⚠️ 上面 ①–⑧ 里，只有「能量拉满」这一条真的能抓住「levelsOf 忘了调用排序」。
+     其余断言都在测 sortLevelsByStrength 这个纯函数本身 —— 把 `return sortLevelsByStrength(out)`
+     改回 `return out`，它们照样全绿（实测：21 项里只有 1 项转红）。
+     纯函数测得再细也证明不了接线，所以下面补三条**只可能来自接线**的断言：
+     直接比对 levelsOf() 的输出与输入顺序，以及每个档位真实渲染到的轨道位置。 */
+
+  // ⑨ 接线：levelsOf() 的输出顺序必须是强度序（而不是目录原序）
+  const snapshot = d.host.store.getSnapshot();
+  eqj(ids(I.levelsOf(snapshot)), ["none", "low", "high", "max"],
+    "[53] levelsOf() 真的排了序（不是只导出了个排序函数）");
+  // 反向锚点：目录原序确实不是强度序，否则上面那条断言恒真
+  eqj(CN.reasoning.efforts.map((e) => e.id), ["high", "max", "low", "none"],
+    "[53] 反向前提：喂进去的目录原序确实不是强度序");
+
+  // ⑩ 接线：每个档位的刻度位置都按强度序算出来（不只是首尾两端）
+  const byId = {};
+  for (let i = 0; i < ticks.length; i += 1) byId[I.levelsOf(snapshot)[i].id] = ticks[i].style.left;
+  eq(byId.none, I.knobOffsetOf(0), "[53] 「关闭思考」刻度在 pct=0");
+  eq(byId.low, I.knobOffsetOf(1 / 3), "[53] 「低」刻度在 pct=1/3");
+  eq(byId.high, I.knobOffsetOf(2 / 3), "[53] 「高」刻度在 pct=2/3");
+  eq(byId.max, I.knobOffsetOf(1), "[53] 「最大」刻度在 pct=1");
+
+  // ⑪ 接线：收起态的档位文字必须来自排序后的列表
+  //     桥按**文字**认官方席按钮上那一段（seatLabels），而 seatLabels 由 levels 派生。
+  //     排序若没接上，席上那个「最大」就认不出来、也就不会着色 —— 用颜色证明它被认到了。
+  //     ⚠️ 席上的文字必须与目录里真实的档位名一致（这里是「最大」），否则认不到是必然的。
+  const d2 = await setup({ host: { model: CN }, menu: { effortLabel: "最大" } });
+  const seatEl = d2.menu.seatEffortEl;
+  ok(seatEl.style.color && seatEl.style.color.length > 0,
+    "[53] 收起态席按钮上的「最大」被按排序后的档位名认到并着色");
+
+  // ⑫ 强度表必须与 dsh-our-free-model 的权威表同源（防两处漂移）
+  eq(Object.keys(I.REASONING_EFFORT_RANK).sort().join(","),
+    ["extra_high", "high", "light", "low", "max", "medium", "minimal", "none", "off", "on", "ultra", "xhigh"].sort().join(","),
+    "[53] 强度表覆盖 reasoning-ladder.ts 的全部 12 个 id");
+  eq(I.effortRankOf("none"), 0, "[53] none 排名 0（关闭思考 = 最左）");
+  eq(I.effortRankOf("max"), 8, "[53] max 排名 8");
+  ok(I.effortRankOf("nope") > 8, "[53] 未登记 id 排名大于所有已知档位");
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */

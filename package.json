@@ -31,7 +31,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node test/client.test.mjs",
+    "test": "node test/client.test.mjs && node test/seat-drag.test.mjs",
     "preview": "node preview/make-preview.mjs",
     "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File ./pack-dist.ps1"
   },

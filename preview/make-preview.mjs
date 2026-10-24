@@ -131,6 +131,9 @@ const constantNames = [
   "KNOB_RADIUS",
   // PR #1：CSS 数组里用到（左端 = 旋钮半径的真半圆 + 右端直角），必须排在 KNOB_RADIUS 之后。
   "FILL_RADIUS",
+  // 模型席拖动换档的档位条：CSS 数组里插值了这两个尺寸
+  "SEAT_BAR_PAD_X_PX",
+  "SEAT_BAR_TRACK_PX",
   // 连续运动引擎的参数（预览页的拖动逻辑要用同一套，否则观感与真插件不一致）
   // 设置 schema 与版本号（normalizeSettings / readSettings 依赖）
   "SETTINGS_SCHEMA",

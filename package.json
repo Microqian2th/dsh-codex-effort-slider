@@ -1,8 +1,17 @@
 {
   "name": "dsh-codex-effort-slider",
-  "version": "1.1.2",
+  "version": "1.1.4",
   "description": "Codex 风格的推理等级滑条：把 DSH 输入框工具行的推理等级档位换成一条可拖动的连续滑条 / A Codex-style reasoning-effort slider for DeepSeek Harness",
   "license": "MIT",
+  "author": "Microqian2th",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Microqian2th/dsh-codex-effort-slider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Microqian2th/dsh-codex-effort-slider/issues"
+  },
+  "homepage": "https://github.com/Microqian2th/dsh-codex-effort-slider#readme",
   "keywords": [
     "dsh",
     "dsh-plugin",

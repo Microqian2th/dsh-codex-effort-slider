@@ -31,25 +31,41 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;gap:18px;padding:
 .controls button{font:inherit;font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
 .controls button:hover{background:var(--dsw-alias-interactive-bg-hover)}
 /* ── 以下是**从 lib/client.js 抽取的真 CSS** ── */
-.ces-inline{--ces-accent:var(--dsw-alias-state-business-primary,var(--dsw-static-blue-450,#4d93f8));box-sizing:border-box;flex-basis:100%;width:100%;min-width:0}
-.ces-track{position:relative;box-sizing:border-box;height:28px;margin-top:2px;border-radius:999px;background:var(--dsw-alias-border-l1,rgba(15,17,21,.08));cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
-.ces-track:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--ces-accent));outline-offset:2px}
-.ces-fill{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;pointer-events:none}
-.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(128,128,128,.30);background:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 26%,transparent);pointer-events:none}
-.ces-tick[data-on='1']{background:rgba(255,255,255,.5)}
-.ces-knob{position:absolute;top:50%;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 .5px rgba(0,0,0,.06);pointer-events:none}
+.ces-inline{--ces-accent:var(--dsw-alias-state-business-primary,var(--dsw-static-blue-450,#4d6bfe));--ces-ocean:#4d6bfe;--ces-ice:#a9d6ff;box-sizing:border-box;flex-basis:100%;width:100%;min-width:0;padding-top:2px}
+.ces-track{position:relative;box-sizing:border-box;height:16px;margin-top:6px;border-radius:999px;background:var(--dsw-alias-border-l1,rgba(15,17,21,.08));box-shadow:inset 0 1px 2px rgba(9,16,45,.16),inset 0 0 0 1px rgba(127,127,127,.10),0 0 calc(var(--ces-energy,0) * 30px) rgba(77,107,254,.62),0 0 calc(var(--ces-energy,0) * 12px) rgba(53,200,255,.5);cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:box-shadow .24s ease}
+.ces-track:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--ces-accent));outline-offset:3px}
+.ces-fill{position:absolute;top:1px;bottom:1px;left:1px;border-radius:999px;pointer-events:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.32)}
+.ces-tick{position:absolute;top:50%;width:2px;height:2px;margin:-1px 0 0 -1px;border-radius:50%;background:rgba(128,128,128,.30);background:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 24%,transparent);pointer-events:none}
+.ces-tick[data-on='1']{background:rgba(255,255,255,.78)}
+.ces-knob{position:absolute;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:radial-gradient(circle at 34% 26%,#ffffff 0%,#f4f8ff 52%,#dfe9ff 100%);box-shadow:0 0 0 1px rgba(12,22,60,.16),0 1px 3px rgba(12,22,60,.3),0 0 calc(2px + var(--ces-energy,0) * 16px) rgba(77,107,254,.8);pointer-events:none;z-index:2;transition:transform .16s ease,box-shadow .2s ease}
+.ces-halo{position:absolute;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:radial-gradient(circle,rgba(77,107,254,.44) 0%,rgba(53,200,255,.2) 46%,rgba(53,200,255,0) 74%);filter:blur(3px);opacity:var(--ces-energy,0);pointer-events:none;z-index:1;animation:ces-halo 3.2s ease-in-out infinite alternate}
+@keyframes ces-halo{0%{transform:scale(.86)}100%{transform:scale(1.12)}}
+.ces-track:hover .ces-knob{transform:scale(1.06)}
+.ces-track:active .ces-knob{transform:scale(1.14)}
 .ces-error{margin-top:6px;font-size:11px;line-height:16px;color:var(--dsw-alias-state-error-primary,#e5484d)}
-.ces-inline[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,.5)}
-.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}
-.ces-energy{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity .2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}
-.ces-stars{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;transition:opacity .2s ease}
-.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}
-.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#fff;box-shadow:0 0 4px rgba(255,255,255,.85);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}
+.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-star__dot,.ces-inline[data-energy='0'] .ces-mote,.ces-inline[data-energy='0'] .ces-mote__dot,.ces-inline[data-energy='0'] .ces-comet,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-inline[data-energy='0'] .ces-energy::before{animation-play-state:paused}
+.ces-energy{position:absolute;top:1px;bottom:1px;left:1px;border-radius:999px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity .22s ease;background:linear-gradient(90deg,rgba(3,8,28,.62) 0%,rgba(3,8,28,.22) 36%,rgba(3,8,28,.02) 62%,rgba(3,8,28,.14) 100%)}
+.ces-energy::before{content:'';position:absolute;inset:-160% -14%;background:radial-gradient(34% 58% at 14% 60%,rgba(53,200,255,.62),rgba(53,200,255,0) 70%),radial-gradient(28% 66% at 46% 40%,rgba(122,152,255,.62),rgba(122,152,255,0) 72%),radial-gradient(30% 60% at 74% 62%,rgba(103,232,249,.5),rgba(103,232,249,0) 72%),radial-gradient(24% 56% at 94% 38%,rgba(169,214,255,.55),rgba(169,214,255,0) 74%);filter:blur(2px);mix-blend-mode:screen;opacity:.5;animation:ces-aurora 6.5s ease-in-out infinite alternate}
+@keyframes ces-aurora{0%{transform:translate3d(-7%,0,0) scaleY(.9)}55%{transform:translate3d(2%,0,0) scaleY(1.16)}100%{transform:translate3d(9%,0,0) scaleY(1.02)}}
+.ces-energy::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,rgba(53,200,255,0) 0%,rgba(53,200,255,.34) 14%,rgba(214,240,255,.26) 24%,rgba(53,200,255,.12) 32%,rgba(53,200,255,0) 44%,rgba(53,200,255,0) 62%,rgba(169,214,255,.22) 70%,rgba(103,232,249,0) 82%);background-size:200% 100%;mix-blend-mode:screen;opacity:.42;animation:ces-flow 4.6s linear infinite}
+@keyframes ces-flow{0%{background-position:100% 0}100%{background-position:-100% 0}}
+.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.55) 50%,transparent 80%);transform:translateX(110%);animation:ces-sweep 2.8s cubic-bezier(.4,0,.55,1) infinite}
+@keyframes ces-sweep{0%{transform:translateX(110%)}60%,100%{transform:translateX(-110%)}}
+.ces-stars{position:absolute;top:-8px;bottom:-8px;left:1px;border-radius:999px;overflow:hidden;pointer-events:none;transition:opacity .2s ease}
+.ces-star{position:absolute;left:0;right:0;height:2px;margin-top:-1px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}
+.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#fff;box-shadow:0 0 5px rgba(214,236,255,.98),0 0 11px rgba(53,200,255,.85);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1));animation-name:ces-twinkle;animation-timing-function:ease-in-out;animation-iteration-count:infinite;animation-direction:alternate}
+@keyframes ces-twinkle{0%{opacity:calc(var(--ces-b,1) * .42);transform:scale(calc(var(--ces-b,1) * .72))}100%{opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}}
+.ces-star__dot--glint::after{content:'';position:absolute;left:50%;top:50%;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;background:linear-gradient(90deg,transparent 46%,rgba(255,255,255,.85) 50%,transparent 54%),linear-gradient(180deg,transparent 46%,rgba(255,255,255,.7) 50%,transparent 54%);mix-blend-mode:screen}
+.ces-mote{position:absolute;left:0;right:0;height:2px;margin-top:-1px;pointer-events:none;opacity:.6;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}
+.ces-mote__dot{position:absolute;left:100%;top:0;width:1.5px;height:1.5px;margin-left:-.75px;border-radius:50%;background:#cfe6ff;box-shadow:0 0 4px rgba(120,190,255,.9);opacity:var(--ces-b,1);animation-name:ces-twinkle;animation-timing-function:ease-in-out;animation-iteration-count:infinite;animation-direction:alternate}
 @keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}
-.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,.30) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite}
-@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}
-body[data-ds-dark-theme] .ces-star__dot{background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,.95)}
-@media (prefers-reduced-motion: reduce){.ces-energy{transition:none}.ces-energy__sweep{display:none}}
+.ces-comet{position:absolute;left:0;right:0;height:1px;pointer-events:none;animation-name:ces-comet-sweep;animation-timing-function:linear;animation-iteration-count:infinite}
+.ces-comet__tail{position:absolute;left:100%;top:0;width:36px;height:1px;border-radius:1px;background:linear-gradient(90deg,rgba(169,214,255,0),rgba(214,240,255,.6));box-shadow:0 0 5px rgba(120,190,255,.6)}
+@keyframes ces-comet-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:.95}70%{opacity:.95}100%{transform:translate3d(-100%,0,0);opacity:0}}
+body[data-ds-dark-theme] .ces-energy::before{opacity:.82}
+body[data-ds-dark-theme] .ces-energy::after{opacity:.85}
+body[data-ds-dark-theme] .ces-star__dot{background:#f2f8ff;box-shadow:0 0 4px rgba(214,236,255,.95),0 0 10px rgba(77,107,254,.8)}
+@media (prefers-reduced-motion: reduce){.ces-energy{transition:none}.ces-energy__sweep{display:none}.ces-comet{display:none}}
 .ces-set{position:fixed;z-index:2147483000;min-width:252px;max-width:340px;padding:10px 12px;border-radius:10px;box-sizing:border-box;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-pri,#1b1c20);border:1px solid rgba(127,127,127,.28);box-shadow:0 12px 32px rgba(0,0,0,.24);font:13px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif}
 .ces-set__title{font-weight:600;margin:0 0 6px 0}
 .ces-set__row{font-size:12px;opacity:.72;margin-bottom:8px}
@@ -59,7 +75,7 @@ body[data-ds-dark-theme] .ces-star__dot{background:#f5f3ff;box-shadow:0 0 5px rg
 .ces-set button{cursor:pointer;font:inherit;color:inherit;padding:4px 10px;border-radius:6px;border:1px solid rgba(127,127,127,.35);background:transparent}
 .ces-set button:hover{background:rgba(127,127,127,.14)}
 body[data-ds-dark-theme] .ces-set{background:var(--dsw-alias-bg-base,#24262c);color:var(--dsw-alias-label-pri,#e8e9ec)}
-.ces-inline[data-reached-ticks='dim'] .ces-tick[data-on='1']{background:rgba(128,128,128,.30);background:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 26%,transparent)}
+.ces-inline[data-reached-ticks='dim'] .ces-tick[data-on='1']{background:rgba(128,128,128,.30);background:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 24%,transparent)}
 .ces-inline[data-reached-ticks='hidden'] .ces-tick[data-on='1']{display:none}
 </style>
 </head>
@@ -135,15 +151,21 @@ function rgbOf(color) {
       return "rgb(" + color[0] + "," + color[1] + "," + color[2] + ")";
     }
 
-function fillColorFor(pct) {
+function fillPartsFor(pct) {
       var t = clamp01(pct);
-      if (t <= ENERGY_START) return rgbOf(COLOR_BLUE);
-      if (t <= ENERGY_END) return rgbOf(mixColor(COLOR_BLUE, COLOR_VIOLET, (t - ENERGY_START) / (ENERGY_END - ENERGY_START)));
-      return rgbOf(mixColor(COLOR_VIOLET, COLOR_DEEP, (t - ENERGY_END) / (1 - ENERGY_END)));
+      if (t <= ENERGY_START) return COLOR_BLUE;
+      if (t <= ENERGY_END) return mixColor(COLOR_BLUE, COLOR_MID, (t - ENERGY_START) / (ENERGY_END - ENERGY_START));
+      return mixColor(COLOR_MID, COLOR_DEEP, (t - ENERGY_END) / (1 - ENERGY_END));
+    }
+
+function fillColorFor(pct) {
+      return rgbOf(fillPartsFor(pct));
     }
 
 function fillBackgroundFor(pct) {
-      return "linear-gradient(90deg, " + rgbOf(COLOR_BLUE) + ", " + fillColorFor(pct) + ")";
+      var end = fillPartsFor(pct);
+      var mid = mixColor(COLOR_BLUE, end, 0.62);
+      return "linear-gradient(90deg, " + rgbOf(COLOR_BLUE) + " 0%, " + rgbOf(mid) + " 62%, " + rgbOf(end) + " 100%)";
     }
 
 function energyFor(pct) {
@@ -246,7 +268,7 @@ function isOffLevel(level) {
 
 function valueColorFor(pct, level) {
       if (isOffLevel(level)) return "";
-      return rgbOf(mixColor(COLOR_BLUE, COLOR_TEXT_VIOLET, energyFor(pct)));
+      return rgbOf(mixColor(COLOR_TEXT_LOW, COLOR_TEXT_HIGH, energyFor(pct)));
     }
 
 function clampAbs(value, limit) {
@@ -399,11 +421,11 @@ function detentTargetIndex(pos, cur, count, third) {
 /* ⚠️ 这里**由 constantNames 自动生成**，不再手写清单 ——
    早先手写过，结果新增常量忘了加，预览页一按下就 ReferenceError 整页挂掉。
    手写清单与 constantNames 必须同步，这种"两处维护"迟早漏一侧。 */
-var ROW_PADDING_BLOCK = "10px";
-var TRACK_HEIGHT = 28;
-var KNOB_SIZE = 28;
-var KNOB_RADIUS = 14;
-var FILL_RADIUS = "border-radius:14px 0 0 14px";
+var ROW_PADDING_BLOCK = "9px";
+var TRACK_HEIGHT = 16;
+var KNOB_SIZE = 22;
+var KNOB_RADIUS = 11;
+var FILL_RADIUS = "border-radius:999px";
 var SETTINGS_SCHEMA = [{"key":"motion","kind":"radio","group":"动画效果","label":"动画效果","default":"full","options":[{"value":"fast","label":"快速动画"},{"value":"quick","label":"简洁动画"},{"value":"full","label":"完整动画"}]},{"key":"reachedTicks","kind":"radio","group":"已到达档位的刻度点","label":"刻度点","default":"hidden","options":[{"value":"highlight","label":"亮白显示"},{"value":"dim","label":"与未到达同色"},{"value":"hidden","label":"隐藏"}]}];
 var SETTINGS_VERSION = 3;
 var SETTINGS_KEY = "dsh-codex-effort-slider.settings";
@@ -427,10 +449,11 @@ var MAX_SPEED_FACTOR = 2;
 var MIN_HEIGHT_SLOTS = 3;
 var ENERGY_START = 0.3333333333333333;
 var ENERGY_END = 0.6666666666666666;
-var COLOR_BLUE = [77,147,248];
-var COLOR_VIOLET = [147,51,234];
-var COLOR_DEEP = [76,29,149];
-var COLOR_TEXT_VIOLET = [139,92,246];
+var COLOR_BLUE = [77,107,254];
+var COLOR_MID = [47,107,255];
+var COLOR_DEEP = [27,72,232];
+var COLOR_TEXT_LOW = [63,99,245];
+var COLOR_TEXT_HIGH = [91,124,255];
 /* 星尘参数表：抽出来的 starDelayFor 会读 PARTICLES，这里必须真的建出来
    （少了它预览页会 ReferenceError 整个脚本挂掉 —— 生成期有守卫盯着这件事）。 */
 var PARTICLES = buildParticles();
@@ -467,11 +490,14 @@ var sweep = document.createElement("div");
 sweep.className = "ces-energy__sweep";
 energy.appendChild(sweep);
 var ticks = document.createElement("span");
+var halo = document.createElement("div");
+halo.className = "ces-halo";
 var knob = document.createElement("div");
 knob.className = "ces-knob";
 track.appendChild(fill);
 track.appendChild(energy);
 track.appendChild(ticks);
+track.appendChild(halo);
 track.appendChild(knob);
 host.appendChild(track);
 var valueSpan = document.getElementById("effortValue");
@@ -496,12 +522,49 @@ var starEls = starDefs.map(function (def, i) {
   star.className = "ces-star";
   star.style.top = def.top + "%";
   var dot = document.createElement("span");
-  dot.className = "ces-star__dot";
+  dot.className = i % 5 === 0 ? "ces-star__dot ces-star__dot--glint" : "ces-star__dot";
   dot.style.setProperty("--ces-b", def.brightness.toFixed(3));
+  // 呼吸层与生产一致：每颗节奏不同（2.2s~4.0s + 负相位），否则 22 颗一起闪
+  var tw = 2.2 + 1.8 * starHash01(i, 97);
+  dot.style.animationDuration = tw.toFixed(3) + "s";
+  dot.style.animationDelay = (-(starHash01(i, 89) * tw)).toFixed(3) + "s";
   star.appendChild(dot);
   star.style.display = "none";
   starHost.appendChild(star);
   return star;
+});
+
+/* 微尘：第二层、更小更慢（与产物同一套确定性伪随机）。 */
+var moteEls = [];
+for (var mi = 0; mi < 12; mi += 1) {
+  var mote = document.createElement("span");
+  mote.className = "ces-mote";
+  mote.style.top = (4 + starHash01(mi, 131) * 92) + "%";
+  var mdot = document.createElement("span");
+  mdot.className = "ces-mote__dot";
+  mdot.style.setProperty("--ces-b", (0.45 + 0.55 * starHash01(mi, 149)).toFixed(3));
+  mote.appendChild(mdot);
+  starHost.appendChild(mote);
+  moteEls.push(mote);
+}
+
+/* 彗星：三束错峰的长尾（与产物同一组参数、同一个层）。 */
+var cometEls = [
+  { top: 22, duration: 4.6, delay: -1.1 },
+  { top: 48, duration: 6.4, delay: -3.7 },
+  { top: 72, duration: 5.2, delay: -2.3 },
+  { top: 88, duration: 7.1, delay: -5.3 },
+].map(function (def) {
+  var el = document.createElement("span");
+  el.className = "ces-comet";
+  el.style.top = def.top + "%";
+  el.style.animationDuration = def.duration.toFixed(3) + "s";
+  el.style.animationDelay = def.delay.toFixed(3) + "s";
+  var tail = document.createElement("span");
+  tail.className = "ces-comet__tail";
+  el.appendChild(tail);
+  starHost.appendChild(el);
+  return el;
 });
 
 /** 速度随位置变化（保留）：MAX 1.5s、high 3s、左端 ~8.6s；各星只差 ±8%。
@@ -517,6 +580,14 @@ function applyParticles(pct) {
     el.style.animationDuration = duration.toFixed(3) + "s";
     el.style.animationDelay = starDelayFor(i, duration).toFixed(3) + "s";
   });
+  var moteCount = count > 0 ? Math.min(moteEls.length, Math.max(6, Math.round(count * 0.6))) : 0;
+  moteEls.forEach(function (el, i) {
+    el.style.display = i < moteCount ? "" : "none";
+    var d = starDurationFor(i, Math.max(0.35, speedFactor * 0.6));
+    el.style.animationDuration = d.toFixed(3) + "s";
+    el.style.animationDelay = (-(((i * 0.381966011 + 0.11) % 1) * d)).toFixed(3) + "s";
+  });
+  cometEls.forEach(function (el) { el.style.display = count > 0 ? "" : "none"; });
   starHost.setAttribute("data-count", String(count));
 }
 
@@ -547,9 +618,10 @@ function render(pct) {
   fill.style.background = fillBackgroundFor(shownPct);
   energy.style.width = offset; // 能量条只覆盖已填充段（档位右边没到的地方不显示）
   knob.style.left = offset;
+  halo.style.left = offset;
   host.style.setProperty("--ces-energy", String(strength));
   host.dataset.energy = strength > 0 ? "1" : "0";
-  row.style.boxShadow = strength > 0 ? "inset 0 0 0 1px rgba(168,85,247," + (0.16 + 0.34 * strength).toFixed(2) + ")" : "";
+  row.style.boxShadow = strength > 0 ? "inset 0 0 0 1px rgba(77,107,254," + (0.12 + 0.3 * strength).toFixed(2) + ")" : "";
   valueSpan.textContent = shown.name;
   // 官方菜单里那一行的数值文字：跟着**显示中**的位置/档位着色（Off 档 = 空串 = 官方灰）
   valueSpan.style.color = valueColorFor(shownPct, shown);

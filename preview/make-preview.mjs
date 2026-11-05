@@ -96,6 +96,7 @@ const fns = [
   "indexFromPct",
   "mixColor",
   "rgbOf",
+  "fillPartsFor",
   "fillColorFor",
   "fillBackgroundFor",
   "energyFor",
@@ -121,8 +122,15 @@ const fns = [
   "readSettings",
   "normalizeSettings",
   "schemaDefaults",
+  // readSettings 的依赖链（缺一个就 ReferenceError → 页面里 motionMode() 抛错 → 拖不动）
+  "cacheGet",
+  "cacheSet",
+  "settingsKey",
+  "settingsEventName",
   "motionMode",
   "motionParamsForMode",
+  // 快速动画（Codex 手感）的"一档一格"判定：预览页也要按同一规则走
+  "detentTargetIndex",
 ].map((name) => extractFunction(source, name)).join("\n\n");
 const constantNames = [
   "ROW_PADDING_BLOCK",
@@ -135,6 +143,10 @@ const constantNames = [
   // 设置 schema 与版本号（normalizeSettings / readSettings 依赖）
   "SETTINGS_SCHEMA",
   "SETTINGS_VERSION",
+  // readSettings 用到的常量/可变缓存（缺了同样会 ReferenceError）
+  "SETTINGS_KEY",
+  "SETTINGS_EVENT",
+  "settingsCache",
   "MOTION",
   "MOTION_REDUCED",
   // 快速动画（Codex 手感）：不跟手 + 一档一格，需与插件同一套参数
@@ -155,14 +167,15 @@ const constantNames = [
   "ENERGY_START",
   "ENERGY_END",
   "COLOR_BLUE",
-  "COLOR_VIOLET",
+  "COLOR_MID",
   "COLOR_DEEP",
-  "COLOR_TEXT_VIOLET",
+  "COLOR_TEXT_LOW",
+  "COLOR_TEXT_HIGH",
 ];
 const { values: constants, source: constantsSource } = extractConstants(source, constantNames);
 const css = extractCss(source, constantsSource);
-if (constants.KNOB_SIZE !== constants.TRACK_HEIGHT) {
-  throw new Error("产物里旋钮直径 ≠ 轨道高度（用户要求「与滑条同宽」）");
+if (!(constants.KNOB_SIZE > constants.TRACK_HEIGHT)) {
+  throw new Error("产物里旋钮没有大于轨道（新版的「球浮在细轨上」几何被改回去了）");
 }
 if (!css.includes(".ces-energy") || !css.includes(".ces-star__dot")) {
   throw new Error("抽出来的 CSS 里没有能量层/星空规则（产物结构变了）");
@@ -306,11 +319,14 @@ var sweep = document.createElement("div");
 sweep.className = "ces-energy__sweep";
 energy.appendChild(sweep);
 var ticks = document.createElement("span");
+var halo = document.createElement("div");
+halo.className = "ces-halo";
 var knob = document.createElement("div");
 knob.className = "ces-knob";
 track.appendChild(fill);
 track.appendChild(energy);
 track.appendChild(ticks);
+track.appendChild(halo);
 track.appendChild(knob);
 host.appendChild(track);
 var valueSpan = document.getElementById("effortValue");
@@ -335,12 +351,49 @@ var starEls = starDefs.map(function (def, i) {
   star.className = "ces-star";
   star.style.top = def.top + "%";
   var dot = document.createElement("span");
-  dot.className = "ces-star__dot";
+  dot.className = i % 5 === 0 ? "ces-star__dot ces-star__dot--glint" : "ces-star__dot";
   dot.style.setProperty("--ces-b", def.brightness.toFixed(3));
+  // 呼吸层与生产一致：每颗节奏不同（2.2s~4.0s + 负相位），否则 22 颗一起闪
+  var tw = 2.2 + 1.8 * starHash01(i, 97);
+  dot.style.animationDuration = tw.toFixed(3) + "s";
+  dot.style.animationDelay = (-(starHash01(i, 89) * tw)).toFixed(3) + "s";
   star.appendChild(dot);
   star.style.display = "none";
   starHost.appendChild(star);
   return star;
+});
+
+/* 微尘：第二层、更小更慢（与产物同一套确定性伪随机）。 */
+var moteEls = [];
+for (var mi = 0; mi < 12; mi += 1) {
+  var mote = document.createElement("span");
+  mote.className = "ces-mote";
+  mote.style.top = (4 + starHash01(mi, 131) * 92) + "%";
+  var mdot = document.createElement("span");
+  mdot.className = "ces-mote__dot";
+  mdot.style.setProperty("--ces-b", (0.45 + 0.55 * starHash01(mi, 149)).toFixed(3));
+  mote.appendChild(mdot);
+  starHost.appendChild(mote);
+  moteEls.push(mote);
+}
+
+/* 彗星：三束错峰的长尾（与产物同一组参数、同一个层）。 */
+var cometEls = [
+  { top: 22, duration: 4.6, delay: -1.1 },
+  { top: 48, duration: 6.4, delay: -3.7 },
+  { top: 72, duration: 5.2, delay: -2.3 },
+  { top: 88, duration: 7.1, delay: -5.3 },
+].map(function (def) {
+  var el = document.createElement("span");
+  el.className = "ces-comet";
+  el.style.top = def.top + "%";
+  el.style.animationDuration = def.duration.toFixed(3) + "s";
+  el.style.animationDelay = def.delay.toFixed(3) + "s";
+  var tail = document.createElement("span");
+  tail.className = "ces-comet__tail";
+  el.appendChild(tail);
+  starHost.appendChild(el);
+  return el;
 });
 
 /** 速度随位置变化（保留）：MAX 1.5s、high 3s、左端 ~8.6s；各星只差 ±8%。
@@ -356,6 +409,14 @@ function applyParticles(pct) {
     el.style.animationDuration = duration.toFixed(3) + "s";
     el.style.animationDelay = starDelayFor(i, duration).toFixed(3) + "s";
   });
+  var moteCount = count > 0 ? Math.min(moteEls.length, Math.max(6, Math.round(count * 0.6))) : 0;
+  moteEls.forEach(function (el, i) {
+    el.style.display = i < moteCount ? "" : "none";
+    var d = starDurationFor(i, Math.max(0.35, speedFactor * 0.6));
+    el.style.animationDuration = d.toFixed(3) + "s";
+    el.style.animationDelay = (-(((i * 0.381966011 + 0.11) % 1) * d)).toFixed(3) + "s";
+  });
+  cometEls.forEach(function (el) { el.style.display = count > 0 ? "" : "none"; });
   starHost.setAttribute("data-count", String(count));
 }
 
@@ -386,9 +447,10 @@ function render(pct) {
   fill.style.background = fillBackgroundFor(shownPct);
   energy.style.width = offset; // 能量条只覆盖已填充段（档位右边没到的地方不显示）
   knob.style.left = offset;
+  halo.style.left = offset;
   host.style.setProperty("--ces-energy", String(strength));
   host.dataset.energy = strength > 0 ? "1" : "0";
-  row.style.boxShadow = strength > 0 ? "inset 0 0 0 1px rgba(168,85,247," + (0.16 + 0.34 * strength).toFixed(2) + ")" : "";
+  row.style.boxShadow = strength > 0 ? "inset 0 0 0 1px rgba(77,107,254," + (0.12 + 0.3 * strength).toFixed(2) + ")" : "";
   valueSpan.textContent = shown.name;
   // 官方菜单里那一行的数值文字：跟着**显示中**的位置/档位着色（Off 档 = 空串 = 官方灰）
   valueSpan.style.color = valueColorFor(shownPct, shown);
@@ -475,14 +537,30 @@ function onMove(clientX) {
   }
   lastPtrPct = pct;
   lastPointerAt = now;
-  motion.target = pct;   // ← 只改目标
+  var count = LEVELS[current].length;
+  if (motionMode() === "fast") {
+    // 快速动画（Codex 手感）：不跟手 —— 目标永远是档位格，越过 1/3 档距才进一格（后退 2/3）。
+    var pos = pct * Math.max(1, count - 1);
+    if (!(detentIndex >= 0)) detentIndex = indexFromPct(motion.target, count);
+    detentIndex = detentTargetIndex(pos, detentIndex, count, DETENT_THIRD);
+    motion.target = pctFromIndex(detentIndex, count);
+  } else {
+    motion.target = pct;   // ← 只改目标
+  }
   startFrames();
 }
+
+var detentIndex = -1;
 
 track.addEventListener("pointerdown", function (event) {
   dragging = true;
   snapIndex = null;
   lastPtrPct = null;
+  detentIndex = -1;
+  if (motionMode() === "fast") {
+    var p0 = pctAt(event.clientX);
+    if (p0 !== null) detentIndex = indexFromPct(p0, LEVELS[current].length);
+  }
   track.setPointerCapture(event.pointerId);
   onMove(event.clientX);
 });
@@ -490,10 +568,19 @@ track.addEventListener("pointermove", function (event) { if (dragging) onMove(ev
 function end() {
   if (!dragging) return;
   dragging = false;
-  // 松手：按指针速度外推落点，目标改为档位点，**速度继承**
-  snapIndex = releaseIndexFor(motion.target, motion.vPtr, LEVELS[current].length);
-  motion.target = pctFromIndex(snapIndex, LEVELS[current].length);
-  motion.vPtr = 0;
+  var count = LEVELS[current].length;
+  if (motionMode() === "fast") {
+    // 快速动画：拖动中目标已经推到格子上，松手不再外推（与真实插件一致）
+    snapIndex = detentIndex >= 0 ? detentIndex : indexFromPct(motion.target, count);
+    snapIndex = Math.max(0, Math.min(count - 1, snapIndex));
+    motion.target = pctFromIndex(snapIndex, count);
+    motion.vPtr = 0;
+  } else {
+    // 松手：按指针速度外推落点，目标改为档位点，**速度继承**
+    snapIndex = releaseIndexFor(motion.target, motion.vPtr, count);
+    motion.target = pctFromIndex(snapIndex, count);
+    motion.vPtr = 0;
+  }
   startFrames();
 }
 track.addEventListener("pointerup", end);

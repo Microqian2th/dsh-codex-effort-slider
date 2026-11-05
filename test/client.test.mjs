@@ -189,17 +189,20 @@ section("2. 只动那一行：加高、折行、不碰官方原有内容");
 section("2b. 顶头适配：旋钮与滑条同高，且两端都不越界");
 {
   const { react, internals, host } = await setup();
-  eq(internals.KNOB_SIZE, internals.TRACK_HEIGHT, "[2b] 旋钮直径 = 轨道高度（「加大到与滑条同宽」）");
+  ok(internals.KNOB_SIZE > internals.TRACK_HEIGHT, `[2b] 旋钮 ${internals.KNOB_SIZE}px > 轨道 ${internals.TRACK_HEIGHT}px（球浮在细轨上）`);
+  ok(internals.TRACK_HEIGHT <= 18, `[2b] 轨道 ${internals.TRACK_HEIGHT}px ≤ 18px（比 28px 的粗管子轻得多）`);
+  ok(internals.TRACK_HEIGHT >= 14, `[2b] 轨道 ${internals.TRACK_HEIGHT}px ≥ 14px（给极光/星尘留了纵深）`);
   eq(internals.KNOB_RADIUS, internals.KNOB_SIZE / 2, "[2b] 半径 = 直径的一半");
-  eq(internals.knobOffsetOf(0), "calc(14px + 0 * (100% - 28px))", "[2b] pct=0 时圆心落在左端半径处");
-  eq(internals.knobOffsetOf(1), "calc(14px + 1 * (100% - 28px))", "[2b] pct=1 时圆心落在右端半径处");
+  const R = internals.KNOB_RADIUS;
+  eq(internals.knobOffsetOf(0), `calc(${R}px + 0 * (100% - ${R * 2}px))`, "[2b] pct=0 时圆心落在左端半径处");
+  eq(internals.knobOffsetOf(1), `calc(${R}px + 1 * (100% - ${R * 2}px))`, "[2b] pct=1 时圆心落在右端半径处");
   ok(internals.CSS.indexOf(".ces-knob{") > 0, "[2b] 有旋钮规则");
   const knobCss = internals.CSS.slice(internals.CSS.indexOf(".ces-knob{"), internals.CSS.indexOf("}", internals.CSS.indexOf(".ces-knob{")));
   ok(knobCss.indexOf("border-radius:50%") > 0, "[2b] 旋钮是正圆（border-radius:50%）");
   ok(knobCss.indexOf(`width:${internals.KNOB_SIZE}px;height:${internals.KNOB_SIZE}px`) > 0, "[2b] 旋钮盒子是等宽高的正方形（配合 50% 圆角才是圆）");
   ok(knobCss.indexOf(`margin:${-internals.KNOB_RADIUS}px 0 0 ${-internals.KNOB_RADIUS}px`) > 0, "[2b] 用 margin 把圆心对准计算出的 left");
   const trackCss = internals.CSS.slice(internals.CSS.indexOf(".ces-track{"), internals.CSS.indexOf("}", internals.CSS.indexOf(".ces-track{")));
-  ok(trackCss.indexOf(`height:${internals.TRACK_HEIGHT}px`) > 0, "[2b] 轨道高度与旋钮直径用同一组常量");
+  ok(trackCss.indexOf(`height:${internals.TRACK_HEIGHT}px`) > 0, "[2b] 轨道高度用 TRACK_HEIGHT 常量");
 
   // 指针映射与视觉几何一致：拖到最左必定命中第一档（而不是因为内缩差一点点）
   {
@@ -282,8 +285,8 @@ section("3. 认不出锚点 / 不该动手时，官方菜单原样不动（fail-
 
 section("4. 关闭菜单 → 官方那一行逐个还原");
 {
-  const { menu, react } = await setup();
-  eq(menu.effortRow.style.paddingTop, "10px", "[4] 打开时确实改了（前置条件）");
+  const { menu, react, internals } = await setup();
+  eq(menu.effortRow.style.paddingTop, internals.ROW_PADDING_BLOCK, "[4] 打开时确实改了（前置条件）");
   const injected = react.find("host");
   ok(injected !== null, "[4] 容器在里面（前置条件）");
 
@@ -452,7 +455,7 @@ section("8. 失败不谎报、不崩、能自愈");
   c.host.ctx.modelDirectories.directoryFor = () => c.host.directory;
   await wait(300);
   await settle(14);
-  eq(c.menu.effortRow.style.paddingTop, "10px", "[8] 目录恢复后滑条自己挂上（起步期抖动不会变永久失效）");
+  eq(c.menu.effortRow.style.paddingTop, c.internals.ROW_PADDING_BLOCK, "[8] 目录恢复后滑条自己挂上（起步期抖动不会变永久失效）");
   ok(c.react.find("track") !== null, "[8] 自愈出来的是完好的滑条");
 }
 
@@ -482,7 +485,8 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   eq(react.find("root").getAttribute("data-energy"), "1", "[10] high 档：能量层已开启（0.5）");
   near(Number(react.find("root").style["--ces-energy"]), 0.5, "[10] high 档能量强度 = 0.5", 1e-6);
   eq(react.findAll("particle").length, 11, "[10] high 档：一半粒子出现（22 × 0.5）");
-  ok(internals.fillBackgroundFor(H).indexOf("linear-gradient(90deg, rgb(77,147,248), rgb(147,51,234))") === 0, "[10] high 档填充是**左蓝右紫**渐变");
+  ok(internals.fillBackgroundFor(H).indexOf("linear-gradient(90deg, rgb(77,107,254) 0%") === 0, "[10] high 档填充以鲸鱼蓝起头");
+  ok(internals.fillBackgroundFor(H).indexOf("rgb(47,107,255) 100%") > 0, "[10] high 档右端是更饱和的 #2F6BFF");
   eq(react.find("fill").style.background, internals.fillBackgroundFor(2 / 3), "[10] high 档渲染出来的就是那个渐变");
   eq(react.find("energy").style.width, react.find("fill").style.width, "[10] 能量条宽度 = 填充宽度（未达到的部分不显示能量条）");
   // ── 动画统一：**所有出现粒子的档位**都用同一套星空（横穿 + 不消失 + 亮度即大小）
@@ -521,13 +525,14 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   eq(react.find("root").getAttribute("data-energy"), "0", "[10] 第二档：能量层关闭");
   eq(react.find("root").style["--ces-energy"], "0", "[10] 能量强度 0");
   eq(react.findAll("particle").length, 0, "[10] 第二档没有粒子（干净蓝）");
-  eq(react.find("fill").style.background, "linear-gradient(90deg, rgb(77,147,248), rgb(77,147,248))", "[10] 第二档填充两端都是蓝（纯蓝段）");
+  eq(react.find("fill").style.background, internals.fillBackgroundFor(T), "[10] 第二档渲染出来的就是纯蓝渐变（三段同色）");
+  ok(internals.fillBackgroundFor(T).indexOf("rgb(27,72,232)") < 0, "[10] 第二档里没有深海色");
 
   // ── 颜色渐变：第一档到第二档为蓝色，再往右逐渐变紫变深
-  eq(internals.fillColorFor(0), "rgb(77,147,248)", "[10] pct=0 蓝");
-  eq(internals.fillColorFor(T), "rgb(77,147,248)", "[10] 第一档到第二档之间恒为蓝色");
-  eq(internals.fillColorFor(H), "rgb(147,51,234)", "[10] high 档（2/3）为紫");
-  eq(internals.fillColorFor(1), "rgb(76,29,149)", "[10] 最高档为深紫");
+  eq(internals.fillColorFor(0), "rgb(77,107,254)", "[10] pct=0 蓝");
+  eq(internals.fillColorFor(T), "rgb(77,107,254)", "[10] 第一档到第二档之间恒为蓝色");
+  eq(internals.fillColorFor(H), "rgb(47,107,255)", "[10] high 档（2/3）为紫");
+  eq(internals.fillColorFor(1), "rgb(27,72,232)", "[10] 最高档为深紫");
   const midColor = internals.fillColorFor((T + H) / 2);
   ok(midColor !== internals.fillColorFor(T) && midColor !== internals.fillColorFor(H), `[10] 蓝紫之间是插值（${midColor}）`);
   const deep1 = internals.fillColorFor(0.8).match(/\d+/g).map(Number);
@@ -560,11 +565,11 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   eq(react.find("root").getAttribute("data-energy"), "1", "[10] 最高档：能量层开启");
   eq(react.find("root").style["--ces-energy"], "1", "[10] 最高档能量强度 = 1");
   eq(react.findAll("particle").length, internals.PARTICLES.length, "[10] 最高档粒子全出（渲染一致）");
-  ok(internals.fillBackgroundFor(1).indexOf("linear-gradient(90deg, rgb(77,147,248), rgb(76,29,149))") === 0, "[10] 最高档填充是左蓝右深紫");
+  ok(internals.fillBackgroundFor(1).indexOf("linear-gradient(90deg, rgb(77,107,254) 0%") === 0 && internals.fillBackgroundFor(1).indexOf("rgb(27,72,232) 100%") > 0, "[10] 最高档填充是鲸鱼蓝 → 深海蓝");
   eq(react.find("energy").style.width, react.find("fill").style.width, "[10] 最高档能量条仍然只覆盖已填充段");
   ok(react.find("sweep") !== null, "[10] 有扫光层");
-  ok(internals.CSS.indexOf("transform:translateX(100%);animation:ces-sweep") > 0, "[10] 扫光方向也改成从右往左");
-  ok(menu.effortRow.style.boxShadow.indexOf("rgba(168,85,247,") >= 0, "[10] 官方那一行描上紫边（内联、强度跟能量走）");
+  ok(internals.CSS.indexOf("animation:ces-sweep 2.8s") > 0 && internals.CSS.indexOf("@keyframes ces-sweep{0%{transform:translateX(110%)}") > 0, "[10] 扫光仍是「从右往左」的一道光");
+  ok(menu.effortRow.style.boxShadow.indexOf("rgba(77,107,254,") >= 0, "[10] 官方那一行描上鲸鱼蓝边（内联、强度跟能量走）");
 
   // ── 星空逻辑（不消失 / 亮度随机 / 越亮越大 / 速率随位置变化）
   eq(react.findAll("star").length, internals.PARTICLES.length, "[10] MAX：外层星空轨道 = 粒子数");
@@ -739,14 +744,14 @@ section("14. 官方数值文字（Max / High）的颜色");
   ok(!menu.modelValueEl.style.color, "[14] 另一行（模型）的数值颜色不动 —— 只碰推理等级那一行");
 
   // 颜色随位置走：蓝 → 紫罗兰
-  eq(internals.valueColorFor(0), "rgb(77,147,248)", "[14] 最左端 = 蓝");
-  eq(internals.valueColorFor(1), "rgb(139,92,246)", "[14] 最高档 = 紫罗兰（不是看不见的深紫，也不是发虚的亮紫）");
+  eq(internals.valueColorFor(0), "rgb(63,99,245)", "[14] 最左端 = 鲸鱼蓝（文字的暗端）");
+  eq(internals.valueColorFor(1), "rgb(91,124,255)", "[14] 最高档 = 紫罗兰（不是看不见的深紫，也不是发虚的亮紫）");
   const rgb = (s) => s.match(/\d+/g).map(Number);
   const low = rgb(internals.valueColorFor(0));
   const mid = rgb(internals.valueColorFor(H));
   const top = rgb(internals.valueColorFor(1));
   ok(mid[0] > low[0] && top[0] > mid[0], "[14] 红色分量单调上升（越往右越紫）");
-  ok(top[1] < low[1], "[14] 绿色分量下降（紫比蓝更冷）");
+  ok(top[2] >= 240 && low[2] >= 240, "[14] 两端都保持高蓝分量（鲸鱼蓝，不是紫）");
   // 可读性：对白底与对深色底（#1b1c20）都要够，这条以后能挡住"挑了个看不见的颜色"
   const luminance = (c) => {
     const f = (v) => {
@@ -771,7 +776,7 @@ section("14. 官方数值文字（Max / High）的颜色");
 
   // 拖到最高档 → 文字变成紫罗兰
   await pressAndSettle(ctx14, 300);
-  eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[14] 拖到 Max：文字直接变紫罗兰");
+  eq(menu.effortValueEl.style.color, "rgb(91,124,255)", "[14] 拖到 Max：文字直接变紫罗兰");
   eq(menu.effortValueEl.textContent, "High", "[14] 文字内容仍然由官方自己管（没被我们改写）");
 
   // 关掉菜单 → 还原成原来的内联颜色（通常是空）
@@ -808,10 +813,10 @@ section("15. 收起态模型席按钮上的档位（点开之前就看得见）"
 
   // 拖动中：官方席显示的是**已生效**档位，所以它的颜色不该跟着草稿跑
   await pressAndSettle(ctx15, 300);
-  eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[15] 菜单里那一行跟着草稿变成 Max 色");
+  eq(menu.effortValueEl.style.color, "rgb(91,124,255)", "[15] 菜单里那一行跟着草稿变成 Max 色");
   eq(menu.seatEffortEl.style.color, internals.valueColorFor(H), "[15] 席按钮仍按已生效档位着色（拖动中不乱跳）");
   await releaseAndSettle(ctx15);
-  eq(menu.seatEffortEl.style.color, "rgb(139,92,246)", "[15] 提交后席按钮跟上 Max 色");
+  eq(menu.seatEffortEl.style.color, "rgb(91,124,255)", "[15] 提交后席按钮跟上 Max 色");
   eq(menu.seatEffortEl.textContent, "High", "[15] 文字仍然由官方自己管（我们只改颜色）");
 
   // 官方重渲染换了那个节点 → 桥要重新抓到并补色
@@ -824,7 +829,7 @@ section("15. 收起态模型席按钮上的档位（点开之前就看得见）"
   parent.appendChild(newNode);
   bundle.flushObservers();
   await settle();
-  eq(newNode.style.color, "rgb(139,92,246)", "[15] 官方换了节点后，新节点也被着色（桥重新抓取）");
+  eq(newNode.style.color, "rgb(91,124,255)", "[15] 官方换了节点后，新节点也被着色（桥重新抓取）");
   eq(oldEl.style.color ?? "", "", "[15] 旧节点被还原后才放手（不留改动）");
 
   // 卸载组件 → 还原席按钮的颜色
@@ -854,7 +859,7 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   ok(!internals.isOffLevel(null) && !internals.isOffLevel(undefined), "[16] 空值不误判");
   // 颜色：off 档给空串 = 不写内联色 = 官方原本的灰
   eq(internals.valueColorFor(0, OFF), "", "[16] off 档 → 空串（不写内联色，保持官方灰）");
-  eq(internals.valueColorFor(0, LOW), "rgb(77,147,248)", "[16] 首档不是 off（比如只有 Low/High/Max）时照常给蓝");
+  eq(internals.valueColorFor(0, LOW), "rgb(63,99,245)", "[16] 首档不是 off（比如只有 Low/High/Max）时照常给蓝");
   eq(internals.valueColorFor(1, OFF), "", "[16] 即便位置在最右，只要档位是 off 就是灰的");
 
   // 真场景：当前档位 = off，且席按钮上也写着 Off
@@ -867,16 +872,16 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   ok(!off.menu.seatLabelEl.style.color, "[16] 模型名依旧不动");
   // 拖到 Max 就恢复着色（确认"灰"只发生在 off 档）
   await pressAndSettle(off, 300);
-  eq(off.menu.effortValueEl.style.color, "rgb(139,92,246)", "[16] 拖到 Max：菜单里那一行先变紫罗兰");
+  eq(off.menu.effortValueEl.style.color, "rgb(91,124,255)", "[16] 拖到 Max：菜单里那一行先变紫罗兰");
   eq(off.menu.seatEffortEl.style.color, "", "[16] 席按钮按已生效档位（仍是 off）→ 还是灰的");
   await releaseAndSettle(off);
-  eq(off.menu.seatEffortEl.style.color, "rgb(139,92,246)", "[16] 提交后席按钮也变成紫罗兰");
+  eq(off.menu.seatEffortEl.style.color, "rgb(91,124,255)", "[16] 提交后席按钮也变成紫罗兰");
 
   // 刻度点：更小更淡
   const tickCss = internals.CSS.slice(internals.CSS.indexOf(".ces-tick{"), internals.CSS.indexOf("}", internals.CSS.indexOf(".ces-tick{")));
-  ok(tickCss.indexOf("width:3px;height:3px") > 0, "[16] 刻度点 5px → 3px（更小）");
-  ok(tickCss.indexOf("26%,transparent") > 0, "[16] 未达到的刻度 38% → 26%（更淡）");
-  ok(internals.CSS.indexOf(".ces-tick[data-on='1']{background:rgba(255,255,255,.5)}") > 0, "[16] 已达刻度 92% → 50% 白（更淡，不再和星星抢眼）");
+  ok(tickCss.indexOf("width:2px;height:2px") > 0, "[16] 刻度点收到 2px（细轨上不该抢眼）");
+  ok(tickCss.indexOf("24%,transparent") > 0, "[16] 未达到的刻度只有 24%（更淡）");
+  ok(internals.CSS.indexOf(".ces-tick[data-on='1']{background:rgba(255,255,255,.78)}") > 0, "[16] 已达刻度是 78% 白（在细轨上够亮、又不抢星尘）");
   const tickNodes = off.react.findAll("tick");
   ok(tickNodes.length >= 4, `[16] 4 档就有 4 个刻度点（实测 ${tickNodes.length}）`);
 }
@@ -1271,7 +1276,8 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
     const W = 300;
     const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
     const readPct = () => pctOf(c.react.find("knob").style.left);
-    const at = (pct) => 14 + pct * (W - 28);
+    const R = c.internals.KNOB_RADIUS;
+    const at = (pct) => R + pct * (W - 2 * R);
 
     // 按下并追到位
     track(c.react).fire("onPointerDown", { clientX: at(0.20), pointerId: 1 });
@@ -1333,7 +1339,8 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
     const W = 300;
     const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
     const readPct = () => pctOf(c.react.find("knob").style.left);
-    const at = (pct) => 14 + pct * (W - 28);
+    const R = c.internals.KNOB_RADIUS;
+    const at = (pct) => R + pct * (W - 2 * R);
 
     // 按下并追到位
     track(c.react).fire("onPointerDown", { clientX: at(0.1), pointerId: 1 });
@@ -1400,7 +1407,7 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
       bundle, host, menu, react,
       track: () => { const n = react.find("track"); if (n) n.rect = { left: 0, top: 0, right: W, bottom: 28, width: W, height: 28 }; return n; },
       readPct: () => pctOf(react.find("knob").style.left),
-      at: (pct) => 14 + pct * (W - 28),
+      at: (pct) => { const RK = bundle.plugin.__internals.KNOB_RADIUS; return RK + pct * (W - 2 * RK); },
       /** 模拟官方菜单改档：直接改共享 store（= ModelSelect 的 submit 效果） */
       officialSelectTo(id) {
         const snap = host.store.getSnapshot();
@@ -1702,6 +1709,37 @@ section("52. 三组动画参数都必须稳定（不许 bang-bang 自激振荡�
   // ③ 把发病参数写进测试：它必须被判据拦住（说明判据真的能防住这个 bug）
   const BAD = { K: 120, A: 600, k: 200, amax: 1200, vmax: 20 };
   ok(BAD.amax / 60 > 0.5 * BAD.vmax, "[52] 1.1.2 的旧简洁参数不满足稳定判据（正是 issue #12 的根因）");
+}
+
+section("10c. 新版观感：深海极光 / 彗星 / 呼吸 / 光晕");
+{
+  const c = await setup();
+  const { react, internals } = c;
+  // 光晕层与旋钮同心（都在 knobOffset 上）
+  ok(react.find("halo") !== null, "[10c] 有旋钮光晕层");
+  eq(react.find("halo").style.left, react.find("knob").style.left, "[10c] 光晕与旋钮同心");
+  // 彗星：有星尘的档位才有（high 档 11 颗星 → 3 束）
+  eq(react.findAll("comet").length, internals.COMETS.length, "[10c] high 档：彗星按 COMETS 数量渲染");
+  ok(react.findAll("comet").every((n) => n.style.animationDuration), "[10c] 彗星时长内联（每束错峰）");
+  // 呼吸：星点的时长/相位内联，且每颗不同（不是整片一起闪）
+  const dots = react.findAll("particle");
+  ok(dots.every((n) => typeof n.style.animationDuration === "string" && n.style.animationDuration !== ""), "[10c] 星点带内联呼吸时长");
+  ok(new Set(dots.map((n) => n.style.animationDuration)).size > 3, "[10c] 呼吸节奏不是一个值（每颗不同）");
+  // 第二层微尘 + 星芒
+  ok(react.findAll("mote").length > 0, "[10c] 有第二层微尘（前后景）");
+  ok(react.findAll("mote").length <= internals.MOTES.length, "[10c] 微尘数量不超过 MOTES 上限");
+  ok(dots.some((n) => String(n.className).indexOf("ces-star__dot--glint") >= 0), "[10c] 亮星带十字星芒");
+  ok(internals.CSS.indexOf(".ces-mote{") > 0 && internals.CSS.indexOf(".ces-star__dot--glint::after") > 0, "[10c] 微尘与星芒样式都在");
+  // 关键帧都在
+  ok(internals.CSS.indexOf("@keyframes ces-twinkle") > 0, "[10c] 有呼吸关键帧");
+  ok(internals.CSS.indexOf("@keyframes ces-aurora") > 0, "[10c] 有极光关键帧");
+  ok(internals.CSS.indexOf("@keyframes ces-flow") > 0, "[10c] 有电流带关键帧");
+  ok(internals.CSS.indexOf("@keyframes ces-comet-sweep") > 0, "[10c] 有彗星关键帧");
+  // 鲸鱼蓝：低档是 #4D6BFE，最高档是深海蓝 #1B48E8
+  eq(internals.fillColorFor(0), "rgb(77,107,254)", "[10c] 低档 = DeepSeek 鲸鱼蓝 #4D6BFE");
+  eq(internals.fillColorFor(1), "rgb(27,72,232)", "[10c] 最高档 = 深海蓝 #1B48E8");
+  // 光晕/极光/彗星都挂在同一个能量变量上
+  ok(internals.CSS.indexOf(".ces-halo{") > 0 && internals.CSS.indexOf("opacity:var(--ces-energy,0)") > 0, "[10c] 光晕强度走 --ces-energy（与能量同源）");
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */

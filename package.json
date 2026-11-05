@@ -1,7 +1,7 @@
 {
   "name": "dsh-codex-effort-slider",
-  "version": "1.1.4",
-  "description": "Codex 风格的推理等级滑条：把 DSH 输入框工具行的推理等级档位换成一条可拖动的连续滑条 / A Codex-style reasoning-effort slider for DeepSeek Harness",
+  "version": "1.2.0",
+  "description": "DeepSeek 鲸鱼配色的推理等级细轨滑条：把 DSH 模型菜单里的「推理等级」一行换成可拖动的 16px 细轨 + 22px 浮球，高档亮起深海极光与星尘 / A DeepSeek-blue thin-rail reasoning-effort slider for DeepSeek Harness",
   "license": "MIT",
   "author": "Microqian2th",
   "repository": {

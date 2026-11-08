@@ -1,17 +1,17 @@
 {
   "name": "dsh-codex-effort-slider",
   "version": "1.1.4",
-  "description": "Codex 风格的推理等级滑条：把 DSH 输入框工具行的推理等级档位换成一条可拖动的连续滑条 / A Codex-style reasoning-effort slider for DeepSeek Harness",
+  "description": "Codex-style reasoning-effort slider with local previews and optimized animations for the DSH model menu",
   "license": "MIT",
   "author": "Microqian2th",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Microqian2th/dsh-codex-effort-slider.git"
+    "url": "git+https://github.com/Yutai233/dsh-codex-effort-slider.git"
   },
   "bugs": {
-    "url": "https://github.com/Microqian2th/dsh-codex-effort-slider/issues"
+    "url": "https://github.com/Yutai233/dsh-codex-effort-slider/issues"
   },
-  "homepage": "https://github.com/Microqian2th/dsh-codex-effort-slider#readme",
+  "homepage": "https://github.com/Yutai233/dsh-codex-effort-slider/tree/perf/slider-preview-animation#readme",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -37,12 +37,20 @@
     "LICENSE",
     "test",
     "preview",
-    "README.md"
+    "README.md",
+    "docs"
   ],
   "scripts": {
-    "test": "node test/client.test.mjs",
+    "test": "node test/run-tests.mjs",
+    "test:functional": "node test/client.test.mjs",
+    "test:performance": "node test/performance.test.mjs",
+    "test:lifecycle": "node test/lifecycle.test.mjs",
+    "test:menu": "node test/menu-presentation.test.mjs",
+    "test:model-switch": "node test/model-switch.test.mjs",
+    "test:border": "node test/purple-border.test.mjs",
     "preview": "node preview/make-preview.mjs",
-    "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File ./pack-dist.ps1"
+    "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File ./pack-dist.ps1",
+    "pack:npm": "npm pack"
   },
   "engines": {
     "node": ">=22"

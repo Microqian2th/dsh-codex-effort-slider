@@ -6,7 +6,7 @@
  * 这一版测的是**新架构**：滑条不再挂在输入框工具行，而是由 DOM 桥注入到
  * 官方模型菜单的「推理等级」那一行内部（那一行同时被加高）。所有断言里最要紧的几条：
  *   · 只动那一行（官方原有的 label/value/chevron 一个不动），关菜单后**逐个还原**
- *   · 拖动真的写回官方档位；不把宿主打爆（去重 + 在途合并 + 降频）
+ *   · 拖动本地预览、松手/键盘写回官方档位（去重 + 在途合并）
  *   · 找不到锚点/不是自己的会话就**什么都不做**（fail-open，官方菜单绝不受影响）
  *   · 结构上不存在消息注入这条路
  */
@@ -86,8 +86,7 @@ async function setup(options = {}) {
  *  1. 必须**每帧之间让渲染落定**：引擎通过 setDraft 触发 React 重渲染，而测试台
  *     的渲染是 queueMicrotask 批处理的 —— 一次泵多帧而不落定微任务，读到的还是旧 DOM。
  *  2. 落定必须用**微任务**而不是 setTimeout：引擎时间走的是假时钟（flushFrames 推进），
- *     但真实墙上时间若被 setTimeout 拖长，`COMMIT_THROTTLE_MS`(120ms) 的定时器会
- *     在拖动中途触发、把"已生效档位"改掉，让"拖动中席按钮不乱跳"这类断言变得不确定。
+ *     动画测试只推进假时钟；拖动超过旧120ms节流窗口仍零提交另有真实等待回归。
  */
 async function runFrames(ctx, frames = 90, dtMs = 16) {
   for (let i = 0; i < frames; i += 1) {
@@ -118,11 +117,24 @@ async function pressOnly(ctx, clientX) {
 }
 
 /** 现查轨道节点并给确定几何（假 DOM 不做布局）。 */
-function track(react, left = 0, width = 300) {
+function track(react, left = 0, width = 200) {
   const node = react.find("track");
   if (!node) return null;
   node.rect = { left, top: 0, right: left + width, bottom: 28, width, height: 28 };
   return node;
+}
+
+
+/** Fixed fake layout: transform stores displacement along the 172px usable track. */
+function pctOf(value) {
+  const css = typeof value === "string" ? value : value.react.find("knob").style.transform;
+  const match = /^translate3d\(\s*([-+\d.eE]+)px,\s*0(?:px)?,\s*0(?:px)?\)$/.exec(css || "");
+  return match ? Number(match[1]) / 172 : null;
+}
+function visibleStars(react) { return react.findAll("star").filter(node => node.style.visibility === "visible"); }
+function clipRight(node) {
+  const match = /^inset\(0\s+([-+\d.eE]+)px\s+0\s+0\)$/.exec(node.style.clipPath || "");
+  return match ? Number(match[1]) : null;
 }
 
 function officialRowText(row) {
@@ -178,9 +190,13 @@ section("2. 只动那一行：加高、折行、不碰官方原有内容");
   eq(track_.getAttribute("aria-valuemax"), "3", "[2] aria-valuemax = 档位数-1");
   eq(track_.getAttribute("aria-valuenow"), "2", "[2] aria-valuenow = 当前档位下标（high = 2）");
   eq(track_.getAttribute("aria-valuetext"), "High", "[2] aria-valuetext = 官方档位名");
+  eq(react.find("knob").style.left, "14px", "[2] 旋钮固定left14px，位置仅用transform");
+  near(clipRight(react.find("fill")), 200 - (14 + 172 * 2 / 3), "[2] 填充裁剪终点与旋钮圆心相同", 0.001);
+  eq(react.find("energy").style.clipPath, react.find("fill").style.clipPath, "[2] 能量层裁剪与填充一致");
+  eq(react.find("stars").style.clipPath, react.find("fill").style.clipPath, "[2] 星空层裁剪与填充一致");
   eq(react.findAll("tick").length, 4, "[2] 刻度数 = 档位数");
-  eq(react.find("fill").style.width, internals.knobOffsetOf(2 / 3), "[2] 填充宽度 = 到旋钮圆心（两端各内缩一个半径）");
-  eq(react.find("knob").style.left, internals.knobOffsetOf(2 / 3), "[2] 旋钮圆心与填充终点重合");
+  eq(react.find("fill").style.width, "100%", "[2] 填充层保持100%宽度（终点由裁剪控制）");
+  near(pctOf(react.find("knob").style.transform), 2 / 3, "[2] 旋钮圆心与填充终点重合", 0.00001);
   eq(react.findAll("tick")[0].style.left, internals.knobOffsetOf(0), "[2] 刻度也走同一套内缩几何（首刻度不顶出左端）");
   eq(react.findAll("tick")[3].style.left, internals.knobOffsetOf(1), "[2] 末刻度不顶出右端");
   ok(react.find("anchor").getAttribute("hidden") !== null, "[2] 锚点自身不可见（输入框工具行不出现任何东西）");
@@ -204,19 +220,19 @@ section("2b. 顶头适配：旋钮与滑条同高，且两端都不越界");
   // 指针映射与视觉几何一致：拖到最左必定命中第一档（而不是因为内缩差一点点）
   {
     const d = await setup();
-    track(d.react, 0, 300).fire("onPointerDown", { clientX: 0, pointerId: 1 }); // 远在左端之外
-    await pressAndSettle(d, 0);
-    releaseAndSettle(d);
-    eq(d.react.find("knob").style.left, internals.knobOffsetOf(0), "[2b] 拖到最左 → 旋钮贴左端圆角内（圆心不越界）");
+    track(d.react, 0, 200).fire("onPointerDown", { clientX: 5.147058823529, pointerId: 1 }); // 远在左端之外
+    await pressAndSettle(d, 5.147058823529);
+    await releaseAndSettle(d);
+    near(pctOf(d), 0, "[2b] 拖到最左 → 旋钮贴左端圆角内（圆心不越界）");
     eq(d.host.selects[d.host.selects.length - 1].reasoningEffort, "off", "[2b] 最左端映射到第一档");
   }
 
   // 右端同理
   {
     const d = await setup();
-    await pressAndSettle(d, 300);
+    await pressAndSettle(d, 194.852941176471);
     releaseAndSettle(d);
-    eq(d.react.find("knob").style.left, internals.knobOffsetOf(1), "[2b] 拖到最右 → 旋钮贴右端圆角内（不会被菜单裁掉）");
+    near(pctOf(d), 1, "[2b] 拖到最右 → 旋钮贴右端圆角内（不会被菜单裁掉）");
     eq(d.host.selects[d.host.selects.length - 1].reasoningEffort, "max", "[2b] 最右端映射到最高档");
   }
 }
@@ -295,6 +311,7 @@ section("4. 关闭菜单 → 官方那一行逐个还原");
   const { menu: menu2, react: react2, bundle } = await setup();
   menu2.close();
   bundle.flushObservers();
+  bundle.flushFrames(1, 16);
   await settle();
   eq(menu2.effortRow.style.paddingTop ?? "", "", "[4] 关菜单后上内距还原");
   eq(menu2.effortRow.style.paddingBottom, "", "[4] 下内距还原");
@@ -305,33 +322,29 @@ section("4. 关闭菜单 → 官方那一行逐个还原");
   ok(react2.portalHosts.length === 0, "[4] portal 已清空");
 }
 
-section("5. 拖动**跨档即写回**（拖到哪档就变成哪一档），松手再确认一次");
+section("5. 拖动期间零提交，松手立即提交最终档位");
 {
   const { menu, react, host } = await setup();
-  track(react).fire("onPointerDown", { clientX: 60, pointerId: 1 }); // 60/300 = 20% → index 1 = low
+  track(react).fire("onPointerDown", { clientX: 43.088235294118, pointerId: 1 }); // 60/300 = 20% → index 1 = low
   await wait(180);
-  // ⚠️ 契约：拖动期**只在跨过档位边界的那一刻**写回一次（不是原来的每 120ms 一次）。
-  //    用户要的是"拖到哪档就变成哪一档"（官方那一行的档位文字随手走）；
-  //    但每秒 8 次写回会让「已生效档位」在拖动中不停变化 → 与滞后的引擎位置不同步 → 抽搐。
-  eq(host.selects.length, 1, "[5] 拖动跨到新档位即写回一次（跨档触发，不是每 120ms 一次）");
-  eq(host.selects[0].reasoningEffort, "low", "[5] 写回的就是指针所在那一档（low）");
+  eq(host.selects.length, 0, "[5] 持续拖住超过120ms仍然0次宿主提交");
 
   track(react).fire("onPointerUp", {});
   await settle();
-  eq(host.selects.length, 1, "[5] 松手时同档位去重，不重复写");
+  eq(host.selects.length, 1, "[5] 松手提交一次最终档位");
   eq(JSON.stringify(host.selects[0]), JSON.stringify({
     provider: "deepseek",
     model: "deepseek-v41-flash",
     reasoningEffort: "low",
   }), "[5] 写回的是官方 select 契约 { provider, model, reasoningEffort }");
   eq(react.find("track").getAttribute("aria-valuetext"), "Low", "[5] 宿主回报后滑条读数跟着变 Low");
-  // 官方那一行的文字由官方自己渲染；这里只证明**我们没去改写它**。
+  // 菜单value预览最终档位；label与节点结构保持不变。
   const officialSpans = menu.effortRow.children.filter((child) => child.tagName === "SPAN");
   eq(officialSpans.length, 2, "[5] 官方两个 span 仍然只有两个");
   eq(officialSpans[0].textContent, "推理等级", "[5] 官方 label 文字没被改写");
-  eq(officialSpans[1].textContent, "High", "[5] 官方 value 文字也没被改写（我们只加自己的容器）");
+  eq(officialSpans[1].textContent, "Low", "[5] 官方 value 文字预览最终Low档位");
 
-  track(react).fire("onPointerDown", { clientX: 290, pointerId: 1 }); // 96.7% → max
+  track(react).fire("onPointerDown", { clientX: 188.529411764706, pointerId: 1 }); // 96.7% → max
   track(react).fire("onPointerUp", {});
   await settle();
   eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[5] 拖到最右 = 最高档");
@@ -343,8 +356,8 @@ section("6. 拖动不会误触官方那一行的点击（会跳进等级列表�
   let drilled = false;
   menu.effortRow.handlers.onClick = () => { drilled = true; };
   const node = track(react);
-  node.fire("onPointerDown", { clientX: 120, pointerId: 1 });
-  node.fire("onPointerMove", { clientX: 200 });
+  node.fire("onPointerDown", { clientX: 81.029411764706, pointerId: 1 });
+  node.fire("onPointerMove", { clientX: 131.617647058824 });
   node.fire("onPointerUp", {});
   node.fire("onClick", {});
   await settle();
@@ -376,7 +389,7 @@ section("7. 键盘可达 + 去重/限频/在途合并");
   // 7a 落在当前档位：一次写回都不该有
   const a = await setup();
   const nodeA = track(a.react);
-  nodeA.fire("onPointerDown", { clientX: 200, pointerId: 1 }); // 66.7% → index 2 = high（当前档）
+  nodeA.fire("onPointerDown", { clientX: 131.617647058824, pointerId: 1 }); // 66.7% → index 2 = high（当前档）
   nodeA.fire("onPointerUp", {});
   await settle();
   eq(a.host.selects.length, 0, "[7] 落在当前档位 → 0 次写回（同档位去重）");
@@ -384,8 +397,8 @@ section("7. 键盘可达 + 去重/限频/在途合并");
   // 7b 一秒内 60 次移动扫过全部档位
   const b = await setup();
   const nodeB = track(b.react);
-  nodeB.fire("onPointerDown", { clientX: 0, pointerId: 1 });
-  for (let i = 0; i <= 60; i += 1) nodeB.fire("onPointerMove", { clientX: (i / 60) * 300 });
+  nodeB.fire("onPointerDown", { clientX: 5.147058823529, pointerId: 1 });
+  for (let i = 0; i <= 60; i += 1) nodeB.fire("onPointerMove", { clientX: (i / 60) * 200 });
   nodeB.fire("onPointerUp", {});
   await settle();
   ok(b.host.selects.length <= 3, `[7] 60 次拖动只写回 ${b.host.selects.length} 次（≤3）`);
@@ -403,11 +416,11 @@ section("7. 键盘可达 + 去重/限频/在途合并");
       },
     },
   });
-  track(d.react).fire("onPointerDown", { clientX: 10, pointerId: 1 }); // off
+  track(d.react).fire("onPointerDown", { clientX: 11.470588235294, pointerId: 1 }); // off
   track(d.react).fire("onPointerUp", {});
   await settle();
   eq(d.host.selects.length, 1, "[7] 第一次写回已发出并挂起");
-  track(d.react).fire("onPointerDown", { clientX: 290, pointerId: 1 }); // max（在途期间）
+  track(d.react).fire("onPointerDown", { clientX: 188.529411764706, pointerId: 1 }); // max（在途期间）
   track(d.react).fire("onPointerUp", {});
   await settle();
   eq(d.host.selects.length, 1, "[7] 在途期间不并发第二个写入（合并，而不是排队打后端）");
@@ -421,7 +434,7 @@ section("8. 失败不谎报、不崩、能自愈");
 {
   // 8a 宿主返回 {ok:false}
   const a = await setup({ host: { select: async () => ({ ok: false, error: { code: "session/writer-held", message: "session is held" } }) } });
-  await pressAndSettle(a, 290);
+  await pressAndSettle(a, 188.529411764706);
   await releaseAndSettle(a);
   await settle(14);
   ok(a.react.find("error") !== null, "[8] 写回失败 → 行里显示错误");
@@ -432,7 +445,7 @@ section("8. 失败不谎报、不崩、能自愈");
   const b = await setup({ host: { select: () => { throw new Error("boom"); } } });
   let threw = false;
   try {
-    await pressAndSettle(b, 290);
+    await pressAndSettle(b, 188.529411764706);
     await releaseAndSettle(b);
     await settle(14);
   } catch (error) {
@@ -475,19 +488,23 @@ section("9. 快照身份稳定（否则 uSES 会把渲染打成死循环）");
 section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越来越密）");
 {
   const ctx10 = await setup();
+  eq(ctx10.react.findAll("star").length, 22, "[10] 固定22颗star节点");
+  eq(ctx10.react.findAll("particle").length, 22, "[10] 固定22颗dot节点");
+  ok(ctx10.react.findAll("particle").every(dot => dot.parentNode.getAttribute("data-ces-part") === "star"), "[10] dot均位于star之下");
   const { react, internals, menu, host } = ctx10;
   const T = internals.ENERGY_START; // 1/3：第二档
   const H = internals.ENERGY_END; // 2/3：high 档（4 档模型）
   // 初始停在 high（pct = 2/3）：新模型下这里能量是 0.5、一半粒子、紫填充
   eq(react.find("root").getAttribute("data-energy"), "1", "[10] high 档：能量层已开启（0.5）");
-  near(Number(react.find("root").style["--ces-energy"]), 0.5, "[10] high 档能量强度 = 0.5", 1e-6);
-  eq(react.findAll("particle").length, 11, "[10] high 档：一半粒子出现（22 × 0.5）");
+  near(Number(react.find("energy").style.opacity), 0.5, "[10] high 档能量强度 = 0.5", 1e-6);
+  eq(visibleStars(react).length, 11, "[10] high 档：一半粒子出现（22 × 0.5）");
   ok(internals.fillBackgroundFor(H).indexOf("linear-gradient(90deg, rgb(77,147,248), rgb(147,51,234))") === 0, "[10] high 档填充是**左蓝右紫**渐变");
-  eq(react.find("fill").style.background, internals.fillBackgroundFor(2 / 3), "[10] high 档渲染出来的就是那个渐变");
+  const anchoredGradient = "linear-gradient(90deg,rgb(77,147,248) 71.333px,rgb(147,51,234) 128.667px,rgb(76,29,149) 186.000px)";
+  eq(react.find("fill").style.background, anchoredGradient, "[10] 渐变按全轨道几何固定蓝紫深紫位置");
   eq(react.find("energy").style.width, react.find("fill").style.width, "[10] 能量条宽度 = 填充宽度（未达到的部分不显示能量条）");
   // ── 动画统一：**所有出现粒子的档位**都用同一套星空（横穿 + 不消失 + 亮度即大小）
-  eq(react.findAll("star").length, 11, "[10] high 档也用星空轨道（不再有「低于 MAX 另一套」）");
-  eq(react.findAll("particle").length, 11, "[10] high 档：一半星星出现（22 × 0.5）");
+  eq(visibleStars(react).length, 11, "[10] high 档也用星空轨道（不再有「低于 MAX 另一套」）");
+  eq(visibleStars(react).length, 11, "[10] high 档：一半星星出现（22 × 0.5）");
   ok(internals.CSS.indexOf(".ces-particle") < 0 && internals.CSS.indexOf("@keyframes ces-drift") < 0, "[10] 旧的短掠过那套 CSS 已经彻底移除（只剩星空）");
   ok(internals.CSS.indexOf("@keyframes ces-star-sweep") > 0 && internals.CSS.indexOf("--ces-dy") < 0, "[10] 只剩星空关键帧，且没有任何上下位移");
   ok(internals.CSS.indexOf("--ces-streak") < 0 && SOURCE.indexOf("streakWidthFor") < 0, "[10] 星痕那套（横向拉伸）已经回退");
@@ -508,20 +525,21 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   near(internals.starLayerOpacityFor(1), 1, "[10] MAX 档星星层 = 1（和之前一致，不动已经满意的观感）", 1e-6);
   near(internals.starLayerOpacityFor(1 / 3), 0.6, "[10] 能量起点处星星层 = 0.6", 1e-6);
 
-  // ── 速度变化保留：位置越快，横穿时长越短（MAX 1.5s ↔ high 3s）
+  // ── 纯函数的速度映射仍保留，但渲染计时固定为high速率，避免重新定时
   near(internals.starDurationFor(0, internals.speedFor(1)), internals.STARFIELD_DURATION_MEAN, "[10] MAX 档横穿时长 = 基准 1.5s", 0.2);
   near(internals.starDurationFor(0, internals.speedFor(H)), internals.STARFIELD_DURATION_MEAN * 2, "[10] high 档横穿时长 = 3s（比 MAX 慢一倍）", 0.3);
   const highDur = parseFloat(react.findAll("star")[0].style.animationDuration);
   ok(highDur > 2.5 && highDur < 3.5, `[10] high 档渲染出来的时长 ≈3s（实测 ${highDur}s）`);
-  ok(highDur / internals.starDurationFor(0, internals.speedFor(1)) > 1.7, "[10] 速度变化保留：high 比 MAX 慢近一倍");
+  near(highDur, internals.starDurationFor(0, internals.speedFor(2 / 3)), "[10] 固定粒子时长以high位置速率生成", 1e-3);
 
   // 第二档（low，pct=1/3）：纯蓝、没有粒子、没有星云
-  await pressAndSettle(ctx10, internals.KNOB_RADIUS + T * (300 - 2 * internals.KNOB_RADIUS));
+  await pressAndSettle(ctx10, internals.KNOB_RADIUS + T * (200 - 2 * internals.KNOB_RADIUS));
   await releaseAndSettle(ctx10);
   eq(react.find("root").getAttribute("data-energy"), "0", "[10] 第二档：能量层关闭");
-  eq(react.find("root").style["--ces-energy"], "0", "[10] 能量强度 0");
-  eq(react.findAll("particle").length, 0, "[10] 第二档没有粒子（干净蓝）");
-  eq(react.find("fill").style.background, "linear-gradient(90deg, rgb(77,147,248), rgb(77,147,248))", "[10] 第二档填充两端都是蓝（纯蓝段）");
+  eq(react.find("energy").style.opacity, "0", "[10] 能量强度 0");
+  eq(visibleStars(react).length, 0, "[10] 第二档没有粒子（干净蓝）");
+  eq(react.find("fill").style.background, anchoredGradient, "[10] 第二档保留静态渐变，裁剪终点位于蓝色锚点");
+  near(clipRight(react.find("fill")), 200 - (14 + 172 / 3), "[10] 第二档只露出蓝色段", 0.001);
 
   // ── 颜色渐变：第一档到第二档为蓝色，再往右逐渐变紫变深
   eq(internals.fillColorFor(0), "rgb(77,147,248)", "[10] pct=0 蓝");
@@ -556,22 +574,22 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(internals.speedFor(0.9) > internals.speedFor(0.7), "[10] 速率随位置递增");
 
   // ── 渲染出来的东西要跟这些函数一致
-  await pressAndSettle(ctx10, 300); // 最右
+  await pressAndSettle(ctx10, 194.852941176471); // 最右
   eq(react.find("root").getAttribute("data-energy"), "1", "[10] 最高档：能量层开启");
-  eq(react.find("root").style["--ces-energy"], "1", "[10] 最高档能量强度 = 1");
+  eq(react.find("energy").style.opacity, "1", "[10] 最高档能量强度 = 1");
   eq(react.findAll("particle").length, internals.PARTICLES.length, "[10] 最高档粒子全出（渲染一致）");
   ok(internals.fillBackgroundFor(1).indexOf("linear-gradient(90deg, rgb(77,147,248), rgb(76,29,149))") === 0, "[10] 最高档填充是左蓝右深紫");
   eq(react.find("energy").style.width, react.find("fill").style.width, "[10] 最高档能量条仍然只覆盖已填充段");
   ok(react.find("sweep") !== null, "[10] 有扫光层");
   ok(internals.CSS.indexOf("transform:translateX(100%);animation:ces-sweep") > 0, "[10] 扫光方向也改成从右往左");
-  ok(menu.effortRow.style.boxShadow.indexOf("rgba(168,85,247,") >= 0, "[10] 官方那一行描上紫边（内联、强度跟能量走）");
+  eq(menu.effortRow.querySelector('[data-ces-part="row-outline"]').style.opacity, "1", "[10] 独立紫边层在高能量时淡入");
 
   // ── 星空逻辑（不消失 / 亮度随机 / 越亮越大 / 速率随位置变化）
   eq(react.findAll("star").length, internals.PARTICLES.length, "[10] MAX：外层星空轨道 = 粒子数");
   ok(internals.starCountFor(1) === internals.PARTICLES.length, "[10] MAX：粒子全出");
   const wrapperMax = react.findAll("star")[0];
   ok(typeof wrapperMax.style.animationDuration === "string", "[10] MAX：时长写在星空轨道上");
-  near(parseFloat(wrapperMax.style.animationDuration), internals.starDurationFor(0, internals.MAX_SPEED_FACTOR), "[10] MAX：时长 = starDurationFor(…, MAX_SPEED_FACTOR)", 1e-3);
+  near(parseFloat(wrapperMax.style.animationDuration), internals.starDurationFor(0, internals.speedFor(2 / 3)), "[10] MAX：使用固定high速率计时", 1e-3);
   // ── B：各星速度只差 ±8%（原来是 2.16×，会追尾成团）
   eq(internals.STARFIELD_DURATION_SPREAD, 0.08, "[10] B：时长浮动 = ±8%");
   const starDurations = internals.PARTICLES.map((_, i) => internals.starDurationFor(i, internals.MAX_SPEED_FACTOR));
@@ -620,7 +638,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(Math.min(...brightness) < 0.7 && Math.max(...brightness) > 0.9, `[10] 亮度铺开到两端（${Math.min(...brightness).toFixed(2)}~${Math.max(...brightness).toFixed(2)}）`);
   ok(internals.starBrightnessFor(0) === internals.starBrightnessFor(0), "[10] 亮度是确定性的（同一 index 结果一致）");
   const another = await setup();
-  await pressAndSettle(another, 300);
+  await pressAndSettle(another, 194.852941176471);
   eq(
     JSON.stringify(another.react.findAll("particle").map((n) => Number(n.getAttribute("data-brightness")))),
     JSON.stringify(brightness),
@@ -630,14 +648,15 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(delays.every((d) => d <= 0), "[10] 相位都是负延迟（一出现就在途中）");
   ok(new Set(delays.map((d) => d.toFixed(2))).size > 10, "[10] 相位铺开（均匀分布在轨道上）");
 
-  // ── 拖回 high：同一套星空动画，但**慢一倍**（速度变化保留）
-  await pressAndSettle(ctx10, internals.KNOB_RADIUS + H * (300 - 2 * internals.KNOB_RADIUS));
-  near(Number(react.find("root").style["--ces-energy"]), 0.5, "[10] 拖到 high：--ces-energy = 0.5");
-  eq(react.findAll("particle").length, 11, "[10] 拖到 high：11 颗星星");
-  eq(react.findAll("star").length, 11, "[10] 拖到 high：仍然是星空轨道（动画已统一）");
+  // ── 拖回 high：仅改变可见密度，不改变动画时长或相位
+  await pressAndSettle(ctx10, internals.KNOB_RADIUS + H * (200 - 2 * internals.KNOB_RADIUS));
+  near(Number(react.find("energy").style.opacity), 0.5, "[10] 拖到 high：能量层opacity = 0.5");
+  eq(visibleStars(react).length, 11, "[10] 拖到 high：11 颗星星");
+  eq(visibleStars(react).length, 11, "[10] 拖到 high：仍然是星空轨道（动画已统一）");
   ok(react.findAll("particle")[0].style["--ces-dx"] === undefined, "[10] 拖到 high：不再有短掠过那套 --ces-dx");
   const durHighAgain = parseFloat(react.findAll("star")[0].style.animationDuration);
-  near(durHighAgain, internals.starDurationFor(0, internals.speedFor(H)), "[10] 拖到 high：时长按 high 的位置速率算", 1e-3);
+  near(durHighAgain, highDur, "[10] 拖动不改变粒子动画时长", 1e-3);
+  eq(react.findAll("star")[0].style.animationDelay, wrapperMax.style.animationDelay, "[10] 拖动不改变粒子负相位");
   // 相位不跟"当前显示几颗"走 → 拖动改变密度时不会被整体重排
   const phaseRatioMax = Number(String(wrapperMax.style.animationDelay).replace("s", "")) / parseFloat(wrapperMax.style.animationDuration);
   const phaseRatioHigh = Number(String(react.findAll("star")[0].style.animationDelay).replace("s", "")) / durHighAgain;
@@ -667,7 +686,7 @@ section("10b. 系统「减少动态效果」下是放缓，不是冻住");
   const reduced = await setup({ reducedMotion: true });
   eq(reduced.react.find("root").getAttribute("data-motion"), "full", "[10b] 默认「完整动画」→ 即便系统要求减少动态也标记 full");
   ok(String(reduced.react.find("track").getAttribute("title")).indexOf("减少动态效果") < 0, "[10b] 默认下 title 不加「已放缓」提示");
-  eq(reduced.react.findAll("star").length, 11, "[10b] 星空照常存在");
+  eq(visibleStars(reduced.react).length, 11, "[10b] 星空照常存在");
   const normalDur = parseFloat(star.style.animationDuration);
   const reducedDur = parseFloat(reduced.react.findAll("star")[0].style.animationDuration);
   near(reducedDur / normalDur, 1, "[10b] 默认「完整动画」→ 星星周期与正常模式一致（不放缓）", 0.01);
@@ -691,12 +710,11 @@ section("11. 结构上不存在消息注入（防同类插件的致命 bug）");
 
 section("12. DOM 锚点契约（官方产物里必须还存在我依赖的语义属性）");
 {
-  const candidates = [
-    "F:/Work Space/DeepSeek Harness/_review/dsh-asar/dsh/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js",
-  ];
-  const official = candidates.find((path) => existsSync(path));
-  if (official === undefined) {
-    console.log("  --   跳过：本机没有解包出来的官方产物（_review/dsh-asar）");
+  const official = process.env.DSH_MODEL_SELECTION_BUNDLE;
+  if (!official) {
+    console.log("  --   SKIP：未设置 DSH_MODEL_SELECTION_BUNDLE；未执行真实宿主源码契约检查（离线假DOM测试照常运行）");
+  } else if (!existsSync(official)) {
+    ok(false, "[12] DSH_MODEL_SELECTION_BUNDLE 指向的文件必须存在");
   } else {
     const text = readFileSync(official, "utf8");
     ok(text.indexOf('"aria-haspopup": "menu"') > 0, "[12] 官方席仍然有 aria-haspopup=menu");
@@ -770,18 +788,19 @@ section("14. 官方数值文字（Max / High）的颜色");
   ok(sum(internals.valueColorFor(1)) > sum(internals.valueColorFor(H)), "[14] 最高档比 high 更亮（越往右越通电）");
 
   // 拖到最高档 → 文字变成紫罗兰
-  await pressAndSettle(ctx14, 300);
+  await pressAndSettle(ctx14, 194.852941176471);
   eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[14] 拖到 Max：文字直接变紫罗兰");
-  eq(menu.effortValueEl.textContent, "High", "[14] 文字内容仍然由官方自己管（没被我们改写）");
+  eq(menu.effortValueEl.textContent, "Max", "[14] 拖动目标预览Max文字");
 
   // 关掉菜单 → 还原成原来的内联颜色（通常是空）
   const { menu: menu3, bundle } = await setup();
   eq(menu3.effortValueEl.style.color, internals.valueColorFor(H), "[14] 关之前确实着色了（前置条件）");
   menu3.close();
-  bundle.flushObservers(); // 生产里靠 MutationObserver 触发（settle 不会跑它）
+  bundle.flushObservers();
+  bundle.flushFrames(1, 16); // 生产里靠 MutationObserver 触发（settle 不会跑它）
   await settle();
   ok(!menu3.effortValueEl.style.color, "[14] 菜单关闭后颜色被还原（不把改动留在官方节点上）");
-  eq(menu3.effortValueEl.textContent, "High", "[14] 还原的是颜色，文字始终是官方自己的");
+  eq(menu3.effortValueEl.textContent, "High", "[14] 关闭后恢复生效High文字");
 
   // 认不出 class 时退到结构判定：最后一个有文字的 span
   const again = await setup();
@@ -807,7 +826,7 @@ section("15. 收起态模型席按钮上的档位（点开之前就看得见）"
   const { react, internals, menu, bundle, document } = ctx15;
 
   // 拖动中：官方席显示的是**已生效**档位，所以它的颜色不该跟着草稿跑
-  await pressAndSettle(ctx15, 300);
+  await pressAndSettle(ctx15, 194.852941176471);
   eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[15] 菜单里那一行跟着草稿变成 Max 色");
   eq(menu.seatEffortEl.style.color, internals.valueColorFor(H), "[15] 席按钮仍按已生效档位着色（拖动中不乱跳）");
   await releaseAndSettle(ctx15);
@@ -823,6 +842,7 @@ section("15. 收起态模型席按钮上的档位（点开之前就看得见）"
   newNode.textContent = "High";
   parent.appendChild(newNode);
   bundle.flushObservers();
+  bundle.flushFrames(1, 16);
   await settle();
   eq(newNode.style.color, "rgb(139,92,246)", "[15] 官方换了节点后，新节点也被着色（桥重新抓取）");
   eq(oldEl.style.color ?? "", "", "[15] 旧节点被还原后才放手（不留改动）");
@@ -860,13 +880,13 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   // 真场景：当前档位 = off，且席按钮上也写着 Off
   const off = await setup({ host: { effort: "off" }, menu: { effortLabel: "Off" } });
   eq(off.react.find("root").getAttribute("data-energy"), "0", "[16] off 档没有能量层（纯蓝、无星云无粒子）");
-  eq(off.react.findAll("particle").length, 0, "[16] off 档没有粒子");
+  eq(visibleStars(off.react).length, 0, "[16] off 档没有粒子");
   eq(off.menu.effortValueEl.style.color, "", "[16] 菜单里那一行的数值文字：灰（不写内联色）");
   eq(off.menu.seatEffortEl.style.color, "", "[16] 收起态席按钮上的档位文字：灰（不写内联色）");
   eq(off.menu.effortValueEl.textContent, "Off", "[16] 文字内容仍然是官方的");
   ok(!off.menu.seatLabelEl.style.color, "[16] 模型名依旧不动");
   // 拖到 Max 就恢复着色（确认"灰"只发生在 off 档）
-  await pressAndSettle(off, 300);
+  await pressAndSettle(off, 194.852941176471);
   eq(off.menu.effortValueEl.style.color, "rgb(139,92,246)", "[16] 拖到 Max：菜单里那一行先变紫罗兰");
   eq(off.menu.seatEffortEl.style.color, "", "[16] 席按钮按已生效档位（仍是 off）→ 还是灰的");
   await releaseAndSettle(off);
@@ -1064,10 +1084,10 @@ section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改�
   // ① 按下不瞬移：按下后**不泵帧**，位置应停在原处（引擎还没走）
   {
     const ctx = await setup();
-    const before = ctx.react.find("knob").style.left;
-    track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+    const before = ctx.react.find("knob").style.transform;
+    track(ctx.react).fire("onPointerDown", { clientX: 194.852941176471, pointerId: 1 });
     for (let m = 0; m < 6; m += 1) await Promise.resolve();
-    const after = ctx.react.find("knob").style.left;
+    const after = ctx.react.find("knob").style.transform;
     eq(after, before, "[18] 按下瞬间**不瞬移**（位置停在原处，等引擎追过去）");
   }
 
@@ -1075,20 +1095,15 @@ section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改�
   {
     const ctx = await setup();
     const I = ctx.internals;
-    /** 从 calc(14px + <pct> * (100% - 28px)) 里取出 pct。 */
-    const pctOf = (css) => {
-      const m = /\+ ([\d.]+) \*/.exec(String(css));
-      return m === null ? null : Number(m[1]);
-    };
-    track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
-    let prev = pctOf(ctx.react.find("knob").style.left);
-    ok(prev !== null, "[18] 位置是 calc() 形式（能解析出 pct）");
+    track(ctx.react).fire("onPointerDown", { clientX: 194.852941176471, pointerId: 1 });
+    let prev = pctOf(ctx.react.find("knob").style.transform);
+    ok(prev !== null, "[18] 位置是 translate3d() 形式（能解析出 pct）");
     let maxJump = 0;
     const seen = [];
     for (let f = 0; f < 30; f += 1) {
       ctx.flushFrames(1, 16);
       for (let m = 0; m < 6; m += 1) await Promise.resolve();
-      const now = pctOf(ctx.react.find("knob").style.left);
+      const now = pctOf(ctx.react.find("knob").style.transform);
       maxJump = Math.max(maxJump, Math.abs(now - prev));
       prev = now;
       seen.push(now);
@@ -1102,7 +1117,7 @@ section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改�
   {
     const ctx = await setup();
     const I = ctx.internals;
-    await pressOnly(ctx, 300);
+    await pressOnly(ctx, 194.852941176471);
     const selectsBefore = ctx.host.selects.length;
     track(ctx.react).fire("onPointerUp", {});
     await settle();
@@ -1113,9 +1128,9 @@ section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改�
   // ④ 吸附结束后交回 effectivePct（不残留 draft）
   {
     const ctx = await setup();
-    await pressAndSettle(ctx, 0);
+    await pressAndSettle(ctx, 5.147058823529);
     await releaseAndSettle(ctx);
-    eq(ctx.react.find("knob").style.left, ctx.internals.knobOffsetOf(0), "[18] 吸附完成后精确落在档位点");
+    near(pctOf(ctx), 0, "[18] 吸附完成后精确落在档位点");
     eq(ctx.react.find("track").getAttribute("aria-valuenow"), "0", "[18] 吸附完成后读数 = 落点档位");
   }
 
@@ -1123,28 +1138,28 @@ section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改�
   {
     const ctx = await setup();
     const I = ctx.internals;
-    await pressOnly(ctx, 150); // 指针落在中间（不是档位点）
+    await pressOnly(ctx, 100); // 指针落在中间（不是档位点）
     await runFrames(ctx);
-    const pct = (150 - I.KNOB_RADIUS) / (300 - 2 * I.KNOB_RADIUS);
-    eq(ctx.react.find("knob").style.left, I.knobOffsetOf(I.clamp01(pct)), "[18] 拖动中追上指针后停在指针处（不跳回档位）");
+    const pct = (100 - I.KNOB_RADIUS) / (200 - 2 * I.KNOB_RADIUS);
+    near(pctOf(ctx), I.clamp01(pct), "[18] 拖动中追上指针后停在指针处（不跳回档位）");
   }
 
   // ⑥ 键盘：只改目标，位置连续过去（不瞬移）
   {
     const ctx = await setup();
-    const before = ctx.react.find("knob").style.left;
+    const before = ctx.react.find("knob").style.transform;
     const trackNode = ctx.react.find("track");
     trackNode.fire("onKeyDown", { key: "Home", preventDefault() {} });
     for (let m = 0; m < 6; m += 1) await Promise.resolve();
-    eq(ctx.react.find("knob").style.left, before, "[18] 键盘改档也不瞬移（位置交给引擎）");
+    eq(ctx.react.find("knob").style.transform, before, "[18] 键盘改档也不瞬移（位置交给引擎）");
     await runFrames(ctx);
-    eq(ctx.react.find("knob").style.left, ctx.internals.knobOffsetOf(0), "[18] 键盘目标最终精确到位");
+    near(pctOf(ctx), 0, "[18] 键盘目标最终精确到位");
   }
 
   // ⑦ 卸载后帧循环必须停（否则 setDraft 到已卸载组件）
   {
     const ctx = await setup();
-    track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+    track(ctx.react).fire("onPointerDown", { clientX: 194.852941176471, pointerId: 1 });
     ctx.flushFrames(1, 16);
     for (let m = 0; m < 6; m += 1) await Promise.resolve();
     ctx.react.unmount();
@@ -1157,10 +1172,6 @@ section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改�
 
 section("19. 两种动画模式：简洁 / 完整，且都不受系统「减少动态效果」影响");
 {
-  const pctOf = (c) => {
-    const m = /\+ ([\d.]+) \*/.exec(c.react.find("knob").style.left || "");
-    return m ? parseFloat(m[1]) : 0;
-  };
   const run = async (c, frames, dt = 16) => {
     for (let i = 0; i < frames; i += 1) {
       const e = c.flushFrames(1, dt);
@@ -1200,9 +1211,9 @@ section("19. 两种动画模式：简洁 / 完整，且都不受系统「减少�
     eq(String(a.react.find("track").getAttribute("title")), String(b.react.find("track").getAttribute("title")),
       `[19] ${mode}：系统开关不改变提示文案`);
     const drive = async (c) => {
-      track(c.react).fire("onPointerDown", { clientX: 60, pointerId: 1 });
+      track(c.react).fire("onPointerDown", { clientX: 43.088235294118, pointerId: 1 });
       await run(c, 4);
-      track(c.react).fire("onPointerMove", { clientX: 260, buttons: 1 });
+      track(c.react).fire("onPointerMove", { clientX: 169.558823529412, buttons: 1 });
       await run(c, 12);
       return pctOf(c);
     };
@@ -1220,12 +1231,12 @@ section("19. 两种动画模式：简洁 / 完整，且都不受系统「减少�
   // ⑥ 未按键的 move 不得带动滑条
   {
     const c = await setup();
-    track(c.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
+    track(c.react).fire("onPointerDown", { clientX: 194.852941176471, pointerId: 1 });
     await run(c, 40);
     track(c.react).fire("onPointerUp", {});
     await run(c, 20);
     const before = pctOf(c);
-    track(c.react).fire("onPointerMove", { clientX: 100, buttons: 0 });
+    track(c.react).fire("onPointerMove", { clientX: 68.382352941176, buttons: 0 });
     await run(c, 6);
     eq(pctOf(c), before, "[19] 松手结束后的无按键 move 不带动滑条");
   }
@@ -1268,9 +1279,9 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
   // ── 接线层：真实的"指针移动 → 停住"必须停在指针处 ──
   {
     const c = await setup();
-    const W = 300;
-    const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
-    const readPct = () => pctOf(c.react.find("knob").style.left);
+    const W = 200;
+
+    const readPct = () => pctOf(c.react.find("knob").style.transform);
     const at = (pct) => 14 + pct * (W - 28);
 
     // 按下并追到位
@@ -1330,9 +1341,9 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
   //      第 2 帧才 0.2100%）。慢拖最容易触发，所以用户体感是"偶尔卡一下"。
   {
     const c = await setup();
-    const W = 300;
-    const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
-    const readPct = () => pctOf(c.react.find("knob").style.left);
+    const W = 200;
+
+    const readPct = () => pctOf(c.react.find("knob").style.transform);
     const at = (pct) => 14 + pct * (W - 28);
 
     // 按下并追到位
@@ -1384,8 +1395,8 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
   // 于是点 max 时 target=1.0 而 x 已=1.0 → 一帧内 settled → 显示从 1/3 跳成 1.0。
   //
   // 用 host.store.set 模拟官方那条改档路径（真机里就是 ModelSelect 的 submit）。
-  const W = 300;
-  const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
+  const W = 200;
+
 
   async function scene21() {
     const document = createDocument();
@@ -1399,7 +1410,7 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
     return {
       bundle, host, menu, react,
       track: () => { const n = react.find("track"); if (n) n.rect = { left: 0, top: 0, right: W, bottom: 28, width: W, height: 28 }; return n; },
-      readPct: () => pctOf(react.find("knob").style.left),
+      readPct: () => pctOf(react.find("knob").style.transform),
       at: (pct) => 14 + pct * (W - 28),
       /** 模拟官方菜单改档：直接改共享 store（= ModelSelect 的 submit 效果） */
       officialSelectTo(id) {
@@ -1487,8 +1498,8 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
   // ④ ⚠️ 反向保护：修法不能破坏写回（曾把对齐放进 ensureMotion 导致写回变 0 次）
   {
     const s = await scene21();
-    s.track().fire("onPointerDown", { clientX: 0, pointerId: 1 });
-    for (let i = 1; i <= 60; i += 1) s.track().fire("onPointerMove", { clientX: (i / 60) * 300 });
+    s.track().fire("onPointerDown", { clientX: 5.147058823529, pointerId: 1 });
+    for (let i = 1; i <= 60; i += 1) s.track().fire("onPointerMove", { clientX: (i / 60) * 200 });
     s.track().fire("onPointerUp", {});
     await settle();
     ok(s.host.selects.length >= 1 && s.host.selects.length <= 3,
@@ -1499,16 +1510,12 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
 
 section("22. 松手手感：两种模式都是动过去而不是瞬跳");
 {
-  const pctOf = (c) => {
-    const m = /\+ ([\d.]+) \*/.exec(c.react.find("knob").style.left || "");
-    return m ? parseFloat(m[1]) : 0;
-  };
   for (const mode of ["full", "quick"]) {
     const c = await setup({ reducedMotion: true });     // 系统开着减少动态，也必须一模一样
     c.internals.writeSettings({ motion: mode });
-    track(c.react).fire("onPointerDown", { clientX: 60, pointerId: 1 });
+    track(c.react).fire("onPointerDown", { clientX: 43.088235294118, pointerId: 1 });
     for (let i = 0; i < 6; i += 1) { c.flushFrames(1, 16); for (let k = 0; k < 6; k += 1) await Promise.resolve(); }
-    track(c.react).fire("onPointerMove", { clientX: 260, buttons: 1 });
+    track(c.react).fire("onPointerMove", { clientX: 169.558823529412, buttons: 1 });
     for (let i = 0; i < 4; i += 1) { c.flushFrames(1, 16); for (let k = 0; k < 6; k += 1) await Promise.resolve(); }
     track(c.react).fire("onPointerUp", {});
     const series = [];
@@ -1630,25 +1637,21 @@ section("51. 快速动画（Codex 手感）：不跟手 + 一档一格 + 约 67m
 
   // ③ 行为：不跟手 + 一档一格
   {
-    const pctOf = (c) => {
-      const mm = /\+ ([\d.]+) \*/.exec(c.react.find("knob").style.left || "");
-      return mm ? parseFloat(mm[1]) : 0;
-    };
     const pump = async (c, n) => { for (let i = 0; i < n; i += 1) { c.flushFrames(1, 16); for (let k = 0; k < 6; k += 1) await Promise.resolve(); } };
 
     const c = await setup({ reducedMotion: true });
     c.internals.writeSettings({ motion: "fast" });
     for (let k = 0; k < 8; k += 1) await Promise.resolve();
 
-    track(c.react).fire("onPointerDown", { clientX: 60, pointerId: 1 }); // 20% → 最近档 index 1
+    track(c.react).fire("onPointerDown", { clientX: 43.088235294118, pointerId: 1 }); // 20% → 最近档 index 1
     await pump(c, 24);
     near(pctOf(c), 1 / 3, "[51] 按下后停在档位格（1/3），而不是指针的 20%（不跟手）", 2e-2);
 
-    track(c.react).fire("onPointerMove", { clientX: 75, buttons: 1 });  // 25%，档内
+    track(c.react).fire("onPointerMove", { clientX: 52.573529411765, buttons: 1 });  // 25%，档内
     await pump(c, 12);
     near(pctOf(c), 1 / 3, "[51] 档内小幅移动 → 旋钮不动（一格一格）", 2e-2);
 
-    track(c.react).fire("onPointerMove", { clientX: 200, buttons: 1 }); // 66.7% → 越过判定线
+    track(c.react).fire("onPointerMove", { clientX: 131.617647058824, buttons: 1 }); // 66.7% → 越过判定线
     let frames = 0;
     for (let i = 0; i < 30; i += 1) {
       c.flushFrames(1, 16);
@@ -1705,6 +1708,159 @@ section("52. 三组动画参数都必须稳定（不许 bang-bang 自激振荡�
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */
+
+section("53. 优化性能契约：零拖动提交、固定节点/计时、transform与裁剪");
+{
+  const c = await setup();
+  const I = c.internals;
+  const timing = () => c.react.findAll("star").map(n => [n.style.animationDuration, n.style.animationDelay]);
+  const initialTiming = JSON.stringify(timing());
+  const at = pct => 14 + 172 * pct;
+  track(c.react).fire("onPointerDown", { clientX: at(0), pointerId: 1, buttons: 1 });
+  for (const pct of [1, 1 / 3, 2 / 3, 0, 1]) {
+    track(c.react).fire("onPointerMove", { clientX: at(pct), buttons: 1 });
+    await runFrames(c, 90);
+    eq(c.host.selects.length, 0, "[53] 跨档并运行动画仍0次宿主提交");
+    near(pctOf(c), pct, "[53] transform精确反映目标位置", 0.00001);
+    eq(c.react.find("knob").style.left, "14px", "[53] 连续位置更新不改变left");
+    for (const part of ["fill", "energy", "stars"]) {
+      eq(c.react.find(part).style.width, "100%", "[53] " + part + "保持全宽");
+      near(clipRight(c.react.find(part)), 200 - at(pct), "[53] " + part + "裁剪终点对齐旋钮圆心", 0.001);
+    }
+    eq(c.react.findAll("star").length, 22, "[53] 跨档不增删star节点池");
+    eq(c.react.findAll("particle").length, 22, "[53] 跨档不增删dot节点池");
+    eq(visibleStars(c.react).length, I.starCountFor(pct), "[53] visibility控制可见星星数量");
+    ok(c.react.findAll("star").every(n => n.style.animationPlayState === (n.style.visibility === "visible" ? "running" : "paused")), "[53] 隐藏星星暂停、可见星星运行");
+    eq(JSON.stringify(timing()), initialTiming, "[53] 跨档不改变任何粒子的duration/delay");
+  }
+  await wait(180);
+  eq(c.host.selects.length, 0, "[53] 跨多档后继续按住180ms仍0提交（超过旧120ms窗口）");
+  track(c.react).fire("onPointerUp", {});
+  await runFrames(c);
+  await settle();
+  eq(c.host.selects.length, 1, "[53] 松手仅提交一次最终档位");
+  eq(c.host.selects[0].reasoningEffort, "max", "[53] 松手提交最终max而非中间经过档位");
+
+  const quick = await setup();
+  quick.internals.writeSettings({ motion: "quick" });
+  // 假window未实现设置事件；显式刷新快照让设置变更在起手前落定，
+  // 不再依赖已被移除的拖动setDraft意外重渲染。
+  quick.host.store.set({ ...quick.host.store.getSnapshot() });
+  await settle();
+  await pressAndSettle(quick, at(1));
+  eq(quick.react.findAll("star").length, 22, "[53] quick同样使用固定22节点池");
+  for (let i = 0; i < 22; i++) {
+    const node = quick.react.findAll("star")[i];
+    const duration = quick.internals.starDurationFor(i, quick.internals.speedFor(2 / 3)) * quick.internals.REDUCED_MOTION_SLOWDOWN;
+    near(parseFloat(node.style.animationDuration), duration, "[53] quick粒子" + i + "按固定high速率放缓", 0.001);
+    near(parseFloat(node.style.animationDelay), quick.internals.starDelayFor(i, duration), "[53] quick粒子" + i + "负相位使用同一放缓时长", 0.001);
+  }
+  await releaseAndSettle(quick);
+}
+
+section("54. 二次修复：指针文字预览与整段拖动零React渲染");
+{
+  const c = await setup();
+  const at = pct => 14 + 172 * pct;
+  const before = c.react.renderCount;
+  const gradient = c.react.find("fill").style.background;
+  const trackNode = track(c.react);
+  trackNode.fire("onPointerDown", { clientX: at(0), pointerId: 1, buttons: 1 });
+  eq(c.menu.effortValueEl.textContent, "Off", "[54] pointerdown即时预览指针Off目标，不等动画");
+  eq(c.menu.seatEffortEl.textContent, "High", "[54] 起手不改已生效席文字");
+  near(pctOf(c), 2 / 3, "[54] 即时标签不使位置瞬移", 0.00001);
+  await runFrames(c, 1);
+  for (const [pct, text, index] of [[1, "Max", 3], [1 / 3, "Low", 1], [0, "Off", 0], [2 / 3, "High", 2]]) {
+    trackNode.fire("onPointerMove", { clientX: at(pct), buttons: 1 });
+    eq(c.menu.effortValueEl.textContent, text, "[54] pointermove即时预览" + text);
+    await runFrames(c, 90);
+    eq(trackNode.getAttribute("aria-valuenow"), String(index), "[54] DOM refs同步ARIA档位");
+    eq(trackNode.getAttribute("aria-valuetext"), text, "[54] DOM refs同步ARIA文字");
+    eq(trackNode.getAttribute("title"), "推理等级：" + text, "[54] DOM refs同步title");
+    ok(c.react.findAll("tick").every((tick, i) => tick.getAttribute("data-on") === (i <= index ? "1" : "0")), "[54] DOM refs同步刻度");
+    eq(c.menu.seatEffortEl.textContent, "High", "[54] 拖动只预览菜单、席文字保持生效High");
+    eq(c.host.selects.length, 0, "[54] 即时文字和ARIA不提交宿主");
+    eq(c.react.renderCount, before, "[54] 起手及跨档全程不触发React渲染");
+    eq(c.react.find("fill").style.background, gradient, "[54] 跨档不重算静态渐变");
+    near(Number(c.react.find("glow").style.opacity), c.internals.energyFor(pct), "[54] 独立glow只以opacity反映能量", 0.00001);
+    eq(c.menu.effortRow.querySelector('[data-ces-part="row-outline"]').style.opacity, c.internals.energyFor(pct) > 0 ? "1" : "0", "[54] 紫边通过独立层透明度切换并由CSS淡入淡出");
+  }
+  ok(c.internals.CSS.includes(".ces-glow{position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:0 0 16px rgba(168,85,247,.5);opacity:0;will-change:opacity}"), "[54] glow固定阴影，opacity可合成");
+  eq(c.react.find("root").style.boxShadow, undefined, "[54] 根节点不逐帧写发光boxShadow");
+  c.react.unmount();
+  eq(c.menu.effortValueEl.textContent, "High", "[54] 未提交预览退出恢复canonical High文字");
+}
+
+section("55. 二次修复：单击首帧响应和长帧子步稳定");
+{
+  for (const dt of [0, 16.67, 50]) {
+    const c = await setup();
+    const before = pctOf(c);
+    const renders = c.react.renderCount;
+    track(c.react).fire("onPointerDown", { clientX: 186, pointerId: 1, buttons: 1 });
+    track(c.react).fire("onPointerUp", {});
+    // 同步down/up后首个rAF不得因为时间戳相同而退化成1ms空帧。
+    c.flushFrames(1, dt);
+    const first = pctOf(c);
+    ok(first > before + 0.005, "[55] 单击首帧明显移动（dt=" + dt + "ms）");
+    ok(first < 1, "[55] 单击首帧保留动画、不直接吸到终点");
+    await settle();
+    await runFrames(c, 90, dt || 16.67);
+    near(pctOf(c), 1, "[55] 单击动画最终准确到Max", 0.00001);
+    eq(c.host.selects.length, 1, "[55] 单击仅提交一次");
+    ok(c.react.renderCount >= renders, "[55] 松手宿主提交允许离散React更新");
+    c.react.unmount();
+  }
+  const c = await setup();
+  const before = pctOf(c);
+  const renders = c.react.renderCount;
+  track(c.react).fire("onPointerDown", { clientX: 14, pointerId: 1, buttons: 1 });
+  c.flushFrames(1, 0);
+  near(pctOf(c), before - 0.044444444444444446, "[55] 首帧按1/60且分两次1/120子步积分", 0.00001);
+  eq(c.react.renderCount, renders, "[55] 首帧绘制也不产生React渲染");
+  let previous = pctOf(c);
+  for (let i = 0; i < 35; i++) {
+    c.flushFrames(1, 50);
+    const current = pctOf(c);
+    ok(current >= 0 && current <= previous + 0.00001, "[55] 50ms长帧分子步后单调且不越界");
+    previous = current;
+  }
+  near(pctOf(c), 0, "[55] 50ms长帧仍准确收敛", 0.00001);
+  c.react.unmount();
+}
+
+section("56. 二次修复：失败回滚文字与退出还原canonical");
+{
+  const failing = await setup({ host: { select: async () => ({ ok: false, error: { message: "preview rejected" } }) } });
+  track(failing.react).fire("onPointerDown", { clientX: 186, pointerId: 1, buttons: 1 });
+  eq(failing.menu.effortValueEl.textContent, "Max", "[56] 提交前即时预览Max");
+  eq(failing.host.selects.length, 0, "[56] 预览Max不提交");
+  track(failing.react).fire("onPointerUp", {});
+  await settle(14);
+  await runFrames(failing, 120);
+  eq(failing.menu.effortValueEl.textContent, "High", "[56] 提交失败后菜单文字回滚真实High");
+  eq(track(failing.react).getAttribute("aria-valuetext"), "High", "[56] 提交失败后ARIA也回滚High");
+  eq(failing.menu.seatEffortEl.textContent, "High", "[56] 失败不污染席文字");
+  failing.react.unmount();
+  eq(failing.menu.effortValueEl.textContent, "High", "[56] 失败后退出仍还原canonical High");
+
+  const success = await setup();
+  await pressAndSettle(success, 14 + 172 / 3);
+  await releaseAndSettle(success);
+  eq(success.menu.effortValueEl.textContent, "Low", "[56] 成功回报后canonical更新为Low");
+  track(success.react).fire("onPointerDown", { clientX: 186, pointerId: 1, buttons: 1 });
+  eq(success.menu.effortValueEl.textContent, "Max", "[56] 下一次未提交预览可为Max");
+  success.react.unmount();
+  eq(success.menu.effortValueEl.textContent, "Low", "[56] 退出恢复最新生效Low而非初始High或草稿Max");
+
+  const bridgeCase = await setup();
+  // 菜单关闭路径也必须恢复文字，而不只依赖卸载清理。
+  track(bridgeCase.react).fire("onPointerDown", { clientX: 186, pointerId: 1, buttons: 1 });
+  eq(bridgeCase.menu.effortValueEl.textContent, "Max", "[56] 关闭前存在未提交文字预览");
+  bridgeCase.menu.close(); bridgeCase.bundle.flushObservers(); bridgeCase.flushFrames(1, 16); await settle();
+  eq(bridgeCase.menu.effortValueEl.textContent, "High", "[56] 关闭菜单恢复canonical High");
+  bridgeCase.react.unmount();
+}
 
 console.log(`\n${failed === 0 ? "全部通过 ✅" : "有失败 ❌"} （${passed} 项通过，${failed} 项失败）`);
 if (failed > 0) {

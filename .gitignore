@@ -10,3 +10,11 @@ Thumbs.db
 
 # profile 清单的备份（install-profile.ps1 会生成在 DSH profile 目录里，这里只是兜底）
 package.json.bak-*
+
+# 本地测试、打包及凭据文件
+coverage/
+*.zip
+.env
+.env.*
+!.env.example
+.vscode/

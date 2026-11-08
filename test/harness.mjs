@@ -41,7 +41,7 @@ class FakeNode {
     this.attributes = new Map();
     this.children = [];
     this.parentNode = null;
-    this.style = {};
+    this.style = { setProperty(name, value) { this[name] = String(value); } };
     this._text = undefined;
     this.handlers = {};
     this.listeners = new Map();
@@ -414,7 +414,7 @@ export function createReactStub() {
     for (const key of Object.keys(props)) {
       if (key === "children") continue;
       const value = props[key];
-      if (key === "style") { node.style = Object.assign({}, value); continue; }
+      if (key === "style") { Object.assign(node.style, value); continue; }
       if (key === "ref") {
         if (typeof value === "function") value(node);
         else if (value && typeof value === "object") value.current = node;

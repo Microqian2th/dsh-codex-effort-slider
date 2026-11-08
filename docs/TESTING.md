@@ -12,6 +12,9 @@ node test/run-tests.mjs
 1. `client.test.mjs`：离线功能断言，覆盖读写、交互、运动、文字回滚和卸载。
 2. `performance.test.mjs`：单版本行为预算测试，零备份/本机目录依赖。
 3. `lifecycle.test.mjs`：观察器和菜单复用/滚动专项。
+4. `menu-presentation.test.mjs`：入场、返回、悬停、延迟显示、整句交叉淡化、取消与清理。
+5. `model-switch.test.mjs`：兼容档位保留、一次请求、目录实例迁移、卸载恢复、旧预览隔离。
+6. `purple-border.test.mjs`：独立描边透明度双向过渡、宿主样式保留和卸载。
 
 当前功能套件本地验收为689项通过。专项测试采用Node assert，失败会返回非零退出码。不要把689理解为真实浏览器端到端测试数。
 
@@ -28,6 +31,14 @@ node test/run-tests.mjs
 
 这些数字来自假React/假DOM，并非耗时、GPU开销、FPS或所有模型下的普遍上限。测试只覆盖所构造场景。
 
+## 独立原生浏览器回归
+
+直接打开 `test/browser/menu-presentation.html?verify-regression=1`（本地文件URL附查询参数），等待约2秒，页尾应输出 `result: PASS`。页面通过相对路径加载实际 `lib/client.js`，不连接真实DSH或账号。
+
+检查原生WAAPI中间帧、悬停不取消、隐藏测量后重新入场、旧/新文字交叉淡化、文字宽度在0/40/90/150/210ms保持稳定、末尾字符从首帧即可容纳，以及快照清理。`?verify=1`另检查紫边原生CSS过渡。可先下载仓库再本地打开；GitHub源码页不会执行页面。
+
+这些独立页面在本地Edge中通过，外壳是构造的，并非真实DSH端到端测试；Node CI不启动浏览器。
+
 ## 真实浏览器手动验收（提交者填写）
 
 - [ ] 系统、浏览器/Electron、DSH版本、插件来源和分支已记录。
@@ -37,4 +48,4 @@ node test/run-tests.mjs
 - [ ] 没有同时启用两个同名插件。
 - [ ] 如报告性能提升，附Performance录制方法及真实帧时数据；否则仅报告离线计数。
 
-已有preview目录是上游历史演示，尚未同步本次实现，不作为验收依据。当前未在Linux/Node22上本地实跑；工作流提供相应CI配置，远端结果须推送后查看。
+已有preview目录是上游历史演示，尚未同步本次实现，不作为验收依据；新独立页在 `test/browser/`。此前修复提交已通过Node22/24 × Windows/Ubuntu CI，本次更新仍须按具体提交查看Actions结果，不能由本地通过推断远端已通过。

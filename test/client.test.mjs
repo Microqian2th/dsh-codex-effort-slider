@@ -582,7 +582,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   eq(react.find("energy").style.width, react.find("fill").style.width, "[10] 最高档能量条仍然只覆盖已填充段");
   ok(react.find("sweep") !== null, "[10] 有扫光层");
   ok(internals.CSS.indexOf("transform:translateX(100%);animation:ces-sweep") > 0, "[10] 扫光方向也改成从右往左");
-  ok(menu.effortRow.style.boxShadow.indexOf("rgba(168,85,247,") >= 0, "[10] 官方那一行描上紫边（内联、强度跟能量走）");
+  eq(menu.effortRow.querySelector('[data-ces-part="row-outline"]').style.opacity, "1", "[10] 独立紫边层在高能量时淡入");
 
   // ── 星空逻辑（不消失 / 亮度随机 / 越亮越大 / 速率随位置变化）
   eq(react.findAll("star").length, internals.PARTICLES.length, "[10] MAX：外层星空轨道 = 粒子数");
@@ -1783,7 +1783,7 @@ section("54. 二次修复：指针文字预览与整段拖动零React渲染");
     eq(c.react.renderCount, before, "[54] 起手及跨档全程不触发React渲染");
     eq(c.react.find("fill").style.background, gradient, "[54] 跨档不重算静态渐变");
     near(Number(c.react.find("glow").style.opacity), c.internals.energyFor(pct), "[54] 独立glow只以opacity反映能量", 0.00001);
-    eq(c.menu.effortRow.style.boxShadow, c.internals.energyFor(pct) > 0 ? "inset 0 0 0 1px rgba(168,85,247,.5)" : "", "[54] 行边框正能量固定.5，零能量清空");
+    eq(c.menu.effortRow.querySelector('[data-ces-part="row-outline"]').style.opacity, c.internals.energyFor(pct) > 0 ? "1" : "0", "[54] 紫边通过独立层透明度切换并由CSS淡入淡出");
   }
   ok(c.internals.CSS.includes(".ces-glow{position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:0 0 16px rgba(168,85,247,.5);opacity:0;will-change:opacity}"), "[54] glow固定阴影，opacity可合成");
   eq(c.react.find("root").style.boxShadow, undefined, "[54] 根节点不逐帧写发光boxShadow");

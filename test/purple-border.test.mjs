@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import { createDocument, createOfficialMenu, createFakeHost, loadBundle, settle } from './harness.mjs';
+const path = fileURLToPath(new URL('../lib/client.js', import.meta.url));
+const document = createDocument(); const menu = createOfficialMenu(document);
+menu.effortRow.style.position = ''; menu.effortRow.style.boxShadow = '0 0 0 1px gray';
+const bundle = loadBundle(path, document); const host = createFakeHost({ effort: 'low' });
+bundle.plugin.apply(host.ctx);
+bundle.react.mount(host.registered[0].Component, { sessionId: 'purple-border-fade' }, menu.composer);
+await settle();
+const outline = () => menu.effortRow.querySelector('[data-ces-part="row-outline"]');
+const track = () => bundle.react.find('track');
+assert.equal(outline().style.opacity, '0');
+assert.equal(outline().getAttribute('aria-hidden'), 'true');
+assert.equal(menu.effortRow.style.position, 'relative');
+assert.equal(menu.effortRow.style.boxShadow, '0 0 0 1px gray', 'host shadow must not be overwritten');
+assert.match(bundle.plugin.__internals.CSS, /\.ces-row-outline\{[^}]*transition:opacity 180ms ease/);
+assert.ok(bundle.plugin.__internals.CSS.includes('@media (prefers-reduced-motion: reduce){.ces-row-outline{transition:none}}'));
+const original = outline();
+track().fire('onPointerDown', { clientX: 14 + 172 * 2 / 3, pointerId: 1, buttons: 1 });
+for (let i = 0; i < 40; i++) { bundle.flushFrames(1, 1000 / 60); for (let j = 0; j < 10; j++) await Promise.resolve(); }
+assert.equal(outline(), original, 'reuse stable stroke raster across levels');
+assert.equal(outline().style.opacity, '1');
+track().fire('onPointerMove', { clientX: 14 + 172 / 3, buttons: 1 });
+for (let i = 0; i < 60; i++) { bundle.flushFrames(1, 1000 / 60); for (let j = 0; j < 10; j++) await Promise.resolve(); }
+assert.equal(outline().style.opacity, '0');
+assert.equal(menu.effortRow.style.boxShadow, '0 0 0 1px gray');
+assert.equal(host.selects.length, 0, 'border transition is visual only');
+bundle.react.unmount();
+assert.equal(outline(), null);
+assert.equal(menu.effortRow.style.position, '');
+assert.equal(menu.effortRow.style.boxShadow, '0 0 0 1px gray');
+console.log('Purple border fade tests passed: stable opacity stroke, bidirectional transition, host styles preserved, reduced motion and cleanup.');

@@ -514,11 +514,11 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   near(internals.starLayerOpacityFor(1 / 3), 0.6, "[10] 能量起点处星星层 = 0.6", 1e-6);
 
   // ── 速度变化保留：位置越快，横穿时长越短（MAX 1.5s ↔ high 3s）
-  near(internals.starDurationFor(0, internals.speedFor(1)), internals.STARFIELD_DURATION_MEAN, "[10] MAX 档横穿时长 = 基准 1.5s", 0.2);
-  near(internals.starDurationFor(0, internals.speedFor(H)), internals.STARFIELD_DURATION_MEAN * 2, "[10] high 档横穿时长 = 3s（比 MAX 慢一倍）", 0.3);
+  near(internals.starDurationFor(0, internals.speedFor(1)), internals.STARFIELD_DURATION_FIXED, "[10] 横穿时长固定 = 3s（速度改由 playbackRate ✓）", 0.3);
+  near(internals.starDurationFor(0, internals.speedFor(H)), internals.STARFIELD_DURATION_FIXED, "[10] high 档同样固定 3s ✓（不再随位置变 ✗）", 0.3);
   const highDur = parseFloat(react.findAll("star")[0].style.animationDuration);
-  ok(highDur > 2.5 && highDur < 3.5, `[10] high 档渲染出来的时长 ≈3s（实测 ${highDur}s）`);
-  ok(highDur / internals.starDurationFor(0, internals.speedFor(1)) > 1.7, "[10] 速度变化保留：high 比 MAX 慢近一倍");
+  ok(highDur > 1.8 && highDur < 2.2, `[10] 渲染出来的时长 ≈2s（固定基准 ✓ 实测 ${highDur}s）`);
+  ok(Math.abs(highDur / internals.starDurationFor(0, internals.speedFor(1)) - 1) < 0.2, "[10] 时长与位置无关（固定 ✓，速度靠 playbackRate ✓ → 不会回退 ✓）");
 
   // 第二档（low，pct=1/3）：纯蓝、没有粒子、没有星云
   await pressAndSettle(ctx10, internals.KNOB_RADIUS + T * (300 - 2 * internals.KNOB_RADIUS));
@@ -557,7 +557,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   // ── 速率：high 档 = 1×（用户实测"现在这个速度刚刚好"），最高档 = 2×
   near(internals.speedFor(H), 1, "[10] high 档速率 = 1×（保持现在的速度）");
   near(internals.speedFor(1), 2, "[10] 最高档速率 = 2×");
-  near(internals.speedFor(0), 0.35, "[10] 左端有 0.35× 下限（不会变成静止）");
+  near(internals.speedFor(0), 0.55, "[10] 左端有 0.55× 下限（不会变成静止 ✓，也不会太慢 ✓）");
   ok(internals.speedFor(0.9) > internals.speedFor(0.7), "[10] 速率随位置递增");
 
   // ── 渲染出来的东西要跟这些函数一致
@@ -582,7 +582,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   const starDurations = internals.PARTICLES.map((_, i) => internals.starDurationFor(i, internals.MAX_SPEED_FACTOR));
   const starMin = Math.min(...starDurations);
   const starMax = Math.max(...starDurations);
-  near((starMin + starMax) / 2, internals.STARFIELD_DURATION_MEAN, "[10] B：时长均值 = STARFIELD_DURATION_MEAN", 0.02);
+  near((starMin + starMax) / 2, internals.STARFIELD_DURATION_FIXED, "[10] B：时长均值 = STARFIELD_DURATION_FIXED（固定 3s ✓）", 0.3);
   ok(starMax / starMin <= 1.18, `[10] B：最快/最慢 ≤1.18×（实测 ${(starMax / starMin).toFixed(3)}×，原来是 2.16×）`);
   ok(new Set(starDurations.map((d) => d.toFixed(4))).size > 15, "[10] B：时长仍然有差异（不是所有星一个值）");
   // ── C：高度 = 随机排列的等距槽位，且与相位**解耦**（不能排成一条斜线）

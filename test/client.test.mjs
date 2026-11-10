@@ -44,6 +44,11 @@ function near(actual, expected, label, tolerance = 1e-6) {
   ok(same, same ? label : `${label}（期望 ≈${expected}，实际 ${actual}）`);
 }
 
+/** 「可见星星」= dot 的 opacity > 0 ✓（现在是 22 颗全预渲染 ✓，靠 opacity 控制显现 ✓） */
+function visibleStarCount(react) {
+  return react.findAll("particle").filter((d) => parseFloat(d.style.opacity || "0") > 0).length;
+}
+
 function section(title) {
   console.log(`\n[${title}]`);
 }
@@ -481,13 +486,13 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   // 初始停在 high（pct = 2/3）：新模型下这里能量是 0.5、一半粒子、紫填充
   eq(react.find("root").getAttribute("data-energy"), "1", "[10] high 档：能量层已开启（0.5）");
   near(Number(react.find("root").style["--ces-energy"]), 0.5, "[10] high 档能量强度 = 0.5", 1e-6);
-  eq(react.findAll("particle").length, 11, "[10] high 档：一半粒子出现（22 × 0.5）");
+  eq(visibleStarCount(react), 11, "[10] high 档：一半粒子出现（22 × 0.5）");
   ok(internals.fillBackgroundFor(H).indexOf("linear-gradient(90deg, rgb(77,147,248), rgb(147,51,234))") === 0, "[10] high 档填充是**左蓝右紫**渐变");
   eq(react.find("fill").style.background, internals.fillBackgroundFor(2 / 3), "[10] high 档渲染出来的就是那个渐变");
   eq(react.find("energy").style.width, react.find("fill").style.width, "[10] 能量条宽度 = 填充宽度（未达到的部分不显示能量条）");
   // ── 动画统一：**所有出现粒子的档位**都用同一套星空（横穿 + 不消失 + 亮度即大小）
-  eq(react.findAll("star").length, 11, "[10] high 档也用星空轨道（不再有「低于 MAX 另一套」）");
-  eq(react.findAll("particle").length, 11, "[10] high 档：一半星星出现（22 × 0.5）");
+  eq(visibleStarCount(react), 11, "[10] high 档也用星空轨道（不再有「低于 MAX 另一套」）");
+  eq(visibleStarCount(react), 11, "[10] high 档：一半星星出现（22 × 0.5）");
   ok(internals.CSS.indexOf(".ces-particle") < 0 && internals.CSS.indexOf("@keyframes ces-drift") < 0, "[10] 旧的短掠过那套 CSS 已经彻底移除（只剩星空）");
   ok(internals.CSS.indexOf("@keyframes ces-star-sweep") > 0 && internals.CSS.indexOf("--ces-dy") < 0, "[10] 只剩星空关键帧，且没有任何上下位移");
   ok(internals.CSS.indexOf("--ces-streak") < 0 && SOURCE.indexOf("streakWidthFor") < 0, "[10] 星痕那套（横向拉伸）已经回退");
@@ -520,7 +525,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   await releaseAndSettle(ctx10);
   eq(react.find("root").getAttribute("data-energy"), "0", "[10] 第二档：能量层关闭");
   eq(react.find("root").style["--ces-energy"], "0", "[10] 能量强度 0");
-  eq(react.findAll("particle").length, 0, "[10] 第二档没有粒子（干净蓝）");
+  eq(visibleStarCount(react), 0, "[10] 第二档没有粒子（干净蓝）");
   eq(react.find("fill").style.background, "linear-gradient(90deg, rgb(77,147,248), rgb(77,147,248))", "[10] 第二档填充两端都是蓝（纯蓝段）");
 
   // ── 颜色渐变：第一档到第二档为蓝色，再往右逐渐变紫变深
@@ -559,7 +564,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   await pressAndSettle(ctx10, 300); // 最右
   eq(react.find("root").getAttribute("data-energy"), "1", "[10] 最高档：能量层开启");
   eq(react.find("root").style["--ces-energy"], "1", "[10] 最高档能量强度 = 1");
-  eq(react.findAll("particle").length, internals.PARTICLES.length, "[10] 最高档粒子全出（渲染一致）");
+  eq(visibleStarCount(react), internals.PARTICLES.length, "[10] 最高档粒子全出（渲染一致）");
   ok(internals.fillBackgroundFor(1).indexOf("linear-gradient(90deg, rgb(77,147,248), rgb(76,29,149))") === 0, "[10] 最高档填充是左蓝右深紫");
   eq(react.find("energy").style.width, react.find("fill").style.width, "[10] 最高档能量条仍然只覆盖已填充段");
   ok(react.find("sweep") !== null, "[10] 有扫光层");
@@ -567,7 +572,7 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   ok(menu.effortRow.style.boxShadow.indexOf("rgba(168,85,247,") >= 0, "[10] 官方那一行描上紫边（内联、强度跟能量走）");
 
   // ── 星空逻辑（不消失 / 亮度随机 / 越亮越大 / 速率随位置变化）
-  eq(react.findAll("star").length, internals.PARTICLES.length, "[10] MAX：外层星空轨道 = 粒子数");
+  eq(visibleStarCount(react), internals.PARTICLES.length, "[10] MAX：外层星空轨道 = 粒子数");
   ok(internals.starCountFor(1) === internals.PARTICLES.length, "[10] MAX：粒子全出");
   const wrapperMax = react.findAll("star")[0];
   ok(typeof wrapperMax.style.animationDuration === "string", "[10] MAX：时长写在星空轨道上");
@@ -633,8 +638,8 @@ section("10. 位置驱动的色彩与粒子（蓝 → 紫 → 深紫，粒子越
   // ── 拖回 high：同一套星空动画，但**慢一倍**（速度变化保留）
   await pressAndSettle(ctx10, internals.KNOB_RADIUS + H * (300 - 2 * internals.KNOB_RADIUS));
   near(Number(react.find("root").style["--ces-energy"]), 0.5, "[10] 拖到 high：--ces-energy = 0.5");
-  eq(react.findAll("particle").length, 11, "[10] 拖到 high：11 颗星星");
-  eq(react.findAll("star").length, 11, "[10] 拖到 high：仍然是星空轨道（动画已统一）");
+  eq(visibleStarCount(react), 11, "[10] 拖到 high：11 颗星星");
+  eq(visibleStarCount(react), 11, "[10] 拖到 high：仍然是星空轨道（动画已统一）");
   ok(react.findAll("particle")[0].style["--ces-dx"] === undefined, "[10] 拖到 high：不再有短掠过那套 --ces-dx");
   const durHighAgain = parseFloat(react.findAll("star")[0].style.animationDuration);
   near(durHighAgain, internals.starDurationFor(0, internals.speedFor(H)), "[10] 拖到 high：时长按 high 的位置速率算", 1e-3);
@@ -667,7 +672,7 @@ section("10b. 系统「减少动态效果」下是放缓，不是冻住");
   const reduced = await setup({ reducedMotion: true });
   eq(reduced.react.find("root").getAttribute("data-motion"), "full", "[10b] 默认「完整动画」→ 即便系统要求减少动态也标记 full");
   ok(String(reduced.react.find("track").getAttribute("title")).indexOf("减少动态效果") < 0, "[10b] 默认下 title 不加「已放缓」提示");
-  eq(reduced.react.findAll("star").length, 11, "[10b] 星空照常存在");
+  eq(visibleStarCount(reduced.react), 11, "[10b] 星空照常存在");
   const normalDur = parseFloat(star.style.animationDuration);
   const reducedDur = parseFloat(reduced.react.findAll("star")[0].style.animationDuration);
   near(reducedDur / normalDur, 1, "[10b] 默认「完整动画」→ 星星周期与正常模式一致（不放缓）", 0.01);
@@ -860,7 +865,7 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   // 真场景：当前档位 = off，且席按钮上也写着 Off
   const off = await setup({ host: { effort: "off" }, menu: { effortLabel: "Off" } });
   eq(off.react.find("root").getAttribute("data-energy"), "0", "[16] off 档没有能量层（纯蓝、无星云无粒子）");
-  eq(off.react.findAll("particle").length, 0, "[16] off 档没有粒子");
+  eq(visibleStarCount(off.react), 0, "[16] off 档没有粒子");
   eq(off.menu.effortValueEl.style.color, "", "[16] 菜单里那一行的数值文字：灰（不写内联色）");
   eq(off.menu.seatEffortEl.style.color, "", "[16] 收起态席按钮上的档位文字：灰（不写内联色）");
   eq(off.menu.effortValueEl.textContent, "Off", "[16] 文字内容仍然是官方的");

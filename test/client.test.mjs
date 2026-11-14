@@ -300,6 +300,7 @@ section("4. 关闭菜单 → 官方那一行逐个还原");
   const { menu: menu2, react: react2, bundle } = await setup();
   menu2.close();
   bundle.flushObservers();
+  bundle.flushFrames(1);
   await settle();
   eq(menu2.effortRow.style.paddingTop ?? "", "", "[4] 关菜单后上内距还原");
   eq(menu2.effortRow.style.paddingBottom, "", "[4] 下内距还原");
@@ -783,7 +784,8 @@ section("14. 官方数值文字（Max / High）的颜色");
   const { menu: menu3, bundle } = await setup();
   eq(menu3.effortValueEl.style.color, internals.valueColorFor(H), "[14] 关之前确实着色了（前置条件）");
   menu3.close();
-  bundle.flushObservers(); // 生产里靠 MutationObserver 触发（settle 不会跑它）
+  bundle.flushObservers();
+  bundle.flushFrames(1); // 生产里靠 MutationObserver 触发（settle 不会跑它）
   await settle();
   ok(!menu3.effortValueEl.style.color, "[14] 菜单关闭后颜色被还原（不把改动留在官方节点上）");
   eq(menu3.effortValueEl.textContent, "High", "[14] 还原的是颜色，文字始终是官方自己的");
@@ -828,6 +830,7 @@ section("15. 收起态模型席按钮上的档位（点开之前就看得见）"
   newNode.textContent = "High";
   parent.appendChild(newNode);
   bundle.flushObservers();
+  bundle.flushFrames(1);
   await settle();
   eq(newNode.style.color, "rgb(139,92,246)", "[15] 官方换了节点后，新节点也被着色（桥重新抓取）");
   eq(oldEl.style.color ?? "", "", "[15] 旧节点被还原后才放手（不留改动）");

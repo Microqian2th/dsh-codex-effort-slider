@@ -311,35 +311,49 @@ section("4. 关闭菜单 → 官方那一行逐个还原");
   ok(react2.portalHosts.length === 0, "[4] portal 已清空");
 }
 
-section("5. 拖动**跨档即写回**（拖到哪档就变成哪一档），松手再确认一次");
+section("5. 拖动期**一次都不写回**，松手才写一次（拖到哪档就变成哪一档）");
 {
   const { menu, react, host } = await setup();
-  track(react).fire("onPointerDown", { clientX: 60, pointerId: 1 }); // 60/300 = 20% → index 1 = low
+  // 旋钮位置读法：内联样式 var(--ces-knob-x) 的百分比（见 [20]/[21] 同款解析）
+  const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
+  const readPct = () => pctOf(react.find("knob").style.left);
+  const pointerToPct = (x) => (x - 14) / (300 - 28); // 14 = 旋钮半径，300 = 轨道宽
+  track(react).fire("onPointerDown", { clientX: 60, pointerId: 1 }); // 60 → index 1 = low
   await wait(180);
-  // ⚠️ 契约：拖动期**只在跨过档位边界的那一刻**写回一次（不是原来的每 120ms 一次）。
-  //    用户要的是"拖到哪档就变成哪一档"（官方那一行的档位文字随手走）；
-  //    但每秒 8 次写回会让「已生效档位」在拖动中不停变化 → 与滞后的引擎位置不同步 → 抽搐。
-  eq(host.selects.length, 1, "[5] 拖动跨到新档位即写回一次（跨档触发，不是每 120ms 一次）");
-  eq(host.selects[0].reasoningEffort, "low", "[5] 写回的就是指针所在那一档（low）");
+  // ⚠️ 契约（v1.1.7 手感修复）：拖动过程中**不发任何写回**。
+  //    旧实现每跨一个档位边界就 requestCommit 一次，于是拖动中「已生效档位」不停变化：
+  //      · 宿主 select() 没有乐观 store，真正写值要等 sessions.selectModel 往返 + syncInputs；
+  //      · 于是每个往返都会让 effectivePct 跳一次 → 引擎对齐 effect 把旋钮拽回去 → 可见的回退/抽搐；
+  //      · 行进中的行重排还会改变轨道宽度 → 旋钮相对指针再跳一下。
+  //    现在位置完全由指针驱动（moveTo 直接写 x=target，1:1 跟手），只有松手那一刻落一次档位。
+  eq(host.selects.length, 0, "[5] 拖动期不写回（0 次），避免远程往返与显示互相踩");
+  // 显示仍然跟手：拖到 20% 时旋钮就该在 20% 上（不再有 v/K 的稳态滞后）。
+  eq(readPct() === null ? null : Math.abs(readPct() - pointerToPct(60)) < 1e-3, true, "[5] 拖动中旋钮位置 = 指针位置（1:1，无滞后）");
+  eq(react.find("track").getAttribute("aria-valuetext"), "Low", "[5] 拖动中读数就已经是 Low（不等宿主回报）");
 
   track(react).fire("onPointerUp", {});
   await settle();
-  eq(host.selects.length, 1, "[5] 松手时同档位去重，不重复写");
+  eq(host.selects.length, 1, "[5] 松手时写回恰好一次");
+  eq(host.selects[0].reasoningEffort, "low", "[5] 写回的就是松手所在那一档（low）");
   eq(JSON.stringify(host.selects[0]), JSON.stringify({
     provider: "deepseek",
     model: "deepseek-v41-flash",
     reasoningEffort: "low",
   }), "[5] 写回的是官方 select 契约 { provider, model, reasoningEffort }");
-  eq(react.find("track").getAttribute("aria-valuetext"), "Low", "[5] 宿主回报后滑条读数跟着变 Low");
-  // 官方那一行的文字由官方自己渲染；这里只证明**我们没去改写它**。
+  eq(react.find("track").getAttribute("aria-valuetext"), "Low", "[5] 宿主回报后滑条读数还是 Low");
+  // 官方那一行的文字由官方自己渲染，但它要等 `sessions.selectModel` 往返 + syncInputs 才更新，
+  // 于是"滑条已经落位、文字还停一会"。所以落档那一刻我们**乐观写一次**文字，并用
+  // MutationObserver 在宿主把旧值写回来的同一绘制帧内改回（见 holdHostText）。
+  // 这里证明：① 官方结构没被破坏；② 文字立刻跟上（不再滞后一次远程往返）。
   const officialSpans = menu.effortRow.children.filter((child) => child.tagName === "SPAN");
   eq(officialSpans.length, 2, "[5] 官方两个 span 仍然只有两个");
   eq(officialSpans[0].textContent, "推理等级", "[5] 官方 label 文字没被改写");
-  eq(officialSpans[1].textContent, "High", "[5] 官方 value 文字也没被改写（我们只加自己的容器）");
+  eq(officialSpans[1].textContent, "Low", "[5] 松手瞬间 value 文字就换成 Low（乐观写入，不等远程往返）");
 
   track(react).fire("onPointerDown", { clientX: 290, pointerId: 1 }); // 96.7% → max
   track(react).fire("onPointerUp", {});
   await settle();
+  eq(host.selects.length, 2, "[5] 第二次拖动也只写一次");
   eq(host.selects[host.selects.length - 1].reasoningEffort, "max", "[5] 拖到最右 = 最高档");
 }
 
@@ -1069,17 +1083,24 @@ section("17. 连续运动引擎：纯函数层（刹车预测 + 速度跟踪）"
 
 section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改目标）");
 {
-  // ① 按下不瞬移：按下后**不泵帧**，位置应停在原处（引擎还没走）
+  // ① 按下即落位：指针落在轨道的哪一点，旋钮就在哪一点（1:1 跟手，不等发动机追）
   {
     const ctx = await setup();
+    const I = ctx.internals;
     const before = ctx.react.find("knob").style.left;
     track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
     for (let m = 0; m < 6; m += 1) await Promise.resolve();
     const after = ctx.react.find("knob").style.left;
-    eq(after, before, "[18] 按下瞬间**不瞬移**（位置停在原处，等引擎追过去）");
+    ok(after !== before, "[18] 按下即落位（不再等发动机慢慢追）");
+    eq(after, I.knobOffsetOf(1), "[18] 落点 = 指针位置（1:1，无 v/K 滞后）");
+    // 就算有人在外面泵帧，拖动期位置也不该被引擎改写：拖动态只做直写，不跑运动积分也不排帧。
+    ctx.flushFrames(10, 16);
+    for (let m = 0; m < 6; m += 1) await Promise.resolve();
+    eq(ctx.react.find("knob").style.left, after, "[18] 拖动期泵帧也不动位置（无空转引擎）");
   }
 
-  // ② 逐帧推进：位置单调逼近目标，且单帧位移有界（永不跳变）
+  // ② 1:1 直写：一步一步拖过去，每次读到的位置都等于指针位置
+  //    （旧实现 e_ss = v_pointer / K，200ms 拖完全程稳态落后约 25% 轨道 —— 这就是"不跟手"的量化来源）
   {
     const ctx = await setup();
     const I = ctx.internals;
@@ -1088,22 +1109,21 @@ section("18. 连续运动引擎：接线层（按下/拖动/松手/键盘只改�
       const m = /\+ ([\d.]+) \*/.exec(String(css));
       return m === null ? null : Number(m[1]);
     };
-    track(ctx.react).fire("onPointerDown", { clientX: 300, pointerId: 1 });
-    let prev = pctOf(ctx.react.find("knob").style.left);
-    ok(prev !== null, "[18] 位置是 calc() 形式（能解析出 pct）");
-    let maxJump = 0;
-    const seen = [];
-    for (let f = 0; f < 30; f += 1) {
-      ctx.flushFrames(1, 16);
-      for (let m = 0; m < 6; m += 1) await Promise.resolve();
+    const usable = 300 - 2 * I.KNOB_RADIUS;
+    track(ctx.react).fire("onPointerDown", { clientX: 20, pointerId: 1 });
+    let maxLag = 0;
+    let nullable = false;
+    for (let step = 1; step <= 30; step += 1) {
+      const x = 20 + step * 9; // 20 → 290
+      track(ctx.react).fire("onPointerMove", { clientX: x, buttons: 1 });
+      for (let m = 0; m < 4; m += 1) await Promise.resolve();
+      const expected = I.clamp01((x - I.KNOB_RADIUS) / usable);
       const now = pctOf(ctx.react.find("knob").style.left);
-      maxJump = Math.max(maxJump, Math.abs(now - prev));
-      prev = now;
-      seen.push(now);
+      if (now === null) nullable = true;
+      maxLag = Math.max(maxLag, Math.abs((now ?? 0) - expected));
     }
-    const jumpLimit = I.MOTION.vmax * (16 / 1000) + 0.01;
-    ok(maxJump <= jumpLimit, `[18] 单帧位移 ${(maxJump * 100).toFixed(2)}% ≤ vmax·dt ${(jumpLimit * 100).toFixed(2)}%（永不跳变）`);
-    ok(seen[seen.length - 1] > seen[0], "[18] 位置逐帧在推进（引擎在工作）");
+    eq(nullable, false, "[18] 位置是 calc() 形式（能解析出 pct）");
+    ok(maxLag < 1e-3, `[18] 拖动全程位置 = 指针位置（最大偏差 ${(maxLag * 100).toFixed(3)}%，旧实现约 25%）`);
   }
 
   // ③ 松手：写回发生在**松手瞬间**，且落点 = 外推后的档位
@@ -1300,8 +1320,9 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
       for (let k = 0; k < 6; k += 1) await Promise.resolve();
     }
 
-    // 指针停住：不再有任何 pointermove。**手指仍按着**，所以循环应当常驻
-    // （这正是修掉"拖动时瞬间卡顿"的做法：追平后不停循环，避免重启第一帧白费）。
+    // 指针停住：不再有任何 pointermove。**手指仍按着**。
+    // 新契约（1:1 直写）：位置**已经**等于指针位置，所以拖动期不排帧、不跑 motionStep ——
+    // 这里应当一帧都不跑，且位置精确停在指针处（旧实现靠常驻循环追平，会空转烧 CPU）。
     let framesAfterStop = 0;
     for (let f = 0; f < 90; f += 1) {
       const e = c.flushFrames(1, 16);
@@ -1313,10 +1334,10 @@ section("20. 指针速度不得冻结（滑块跑到鼠标一侧的回归）");
 
     const finalPct = readPct();
     const offset = finalPct - lastPct;
-    ok(Math.abs(offset) < 0.01,
-      `[20] 指针停住后滑块停在指针处（偏移 ${(offset * 100).toFixed(3)}%，旧代码是 +13.33%）`);
-    ok(framesAfterStop >= 80,
-      `[20] 拖动中（手指未松）帧循环**保持常驻**（跑了 ${framesAfterStop} 帧）—— 避免重启第一帧白费`);
+    ok(Math.abs(offset) < 1e-3,
+      `[20] 指针停住后滑块精确停在指针处（偏移 ${(offset * 100).toFixed(3)}%，旧代码是 +13.33%）`);
+    ok(framesAfterStop === 0,
+      `[20] 拖动期不排帧、不空转（跑了 ${framesAfterStop} 帧；1:1 直写之后没有需要补间的量）`);
 
     // 真正该"停"的时机：松手之后
     track(c.react).fire("onPointerUp", {});
@@ -1434,7 +1455,7 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
     return { before, after: s.readPct() };
   }
 
-  // ① 用户的确切步骤：拖到 max → 官方选 low → 点 max
+  // ① 用户的确切步骤：拖到 max → 官方选 low →（新契约）点 max 立即跟手
   {
     const s = await scene21();
     s.track().fire("onPointerDown", { clientX: s.at(1.0), pointerId: 1 });
@@ -1444,15 +1465,30 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
     await settle();
     near(s.readPct(), 1.0, "[21] 前置：滑块先拖到 max", 1e-3);
 
+    // 官方改档：引擎滑过去（不是瞬移），过程中每帧跳变必须小
     s.officialSelectTo("low");
     await settle();
-    near(s.readPct(), 1 / 3, "[21] 官方选 low 后显示位置跟到 low", 1e-3);
+    let worstStep = 0;
+    for (let i = 0; i < 200; i += 1) {
+      const before = s.readPct();
+      const e = s.bundle.flushFrames(1, 16);
+      for (let k = 0; k < 6; k += 1) await Promise.resolve();
+      if (e === 0) break;
+      worstStep = Math.max(worstStep, Math.abs(s.readPct() - before));
+    }
+    near(s.readPct(), 1 / 3, "[21] 官方选 low 后显示位置滑到 low", 1e-2);
+    ok(worstStep < 0.12,
+      `[21] 而且是一帧一帧滑过去的（最大单帧跳变 ${(worstStep * 100).toFixed(2)}% < 12%；旧实现直接写 m.x 会 66%）`);
 
+    // ⚠️ 契约变更（v1.1.7）：点远处 = 立即跟手。
+    //    旧契约是"点一下只召唤，位置交给弹簧追" —— 那正是用户抱怨的"不跟手、不及时"。
+    //    现在指针落在哪，旋钮就在哪（第 0 帧到位），弹簧只用于松手吸附与键盘。
     const r = await tapFirstFrame(s, 1.0);
-    ok(Math.abs(r.after - r.before) < 0.05,
-      `[21] 点 max 不再瞬移（第 0 帧跳变 ${((r.after - r.before) * 100).toFixed(2)}%，修前是 66.67%）`);
+    ok(Math.abs(r.after - 1.0) < 0.05,
+      `[21] 点 max 立即跟手（第 0 帧到 ${(r.after * 100).toFixed(1)}%，不再等引擎慢慢追）`);
+    s.track().fire("onPointerUp", {});
     await pump21(s, 40);
-    near(s.readPct(), 1.0, "[21] 之后平滑滑到 max", 1e-2);
+    near(s.readPct(), 1.0, "[21] 松手后落在 max", 1e-2);
   }
 
   // ② 点"当前显示位置"应当完全不动（引擎起点正确的最强证据）
@@ -1465,16 +1501,19 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
     await settle();
     s.officialSelectTo("low");
     await settle();
+    await pump21(s, 200);   // 官方改档是滑过去的，需要让引擎跑完
+    await settle();
+    near(s.readPct(), 1 / 3, "[21] 前置：官方改到 low 后已滑到位", 1e-2);
     const r = await tapFirstFrame(s, 1 / 3);
     ok(Math.abs(r.after - r.before) < 0.02,
       `[21] 点"显示中的位置"完全不动（第 0 帧跳变 ${((r.after - r.before) * 100).toFixed(2)}%）`);
   }
 
-  // ③ 连续多轮"官方改档 → 滑块操作"都不跳变
+  // ③ 连续多轮"官方改档 → 滑块操作"：官方改档要滑、点当前位置不动
   {
     const s = await scene21();
     const ids = ["off", "low", "high", "max"];
-    let worst = 0;
+    let worstStep = 0;
     for (let round = 0; round < 4; round += 1) {
       s.track().fire("onPointerDown", { clientX: s.at(1.0), pointerId: 1 });
       await pump21(s, 200);
@@ -1483,13 +1522,23 @@ section("21. 官方菜单改档后，引擎必须跟随（防瞬移）");
       await settle();
       s.officialSelectTo(ids[round]);
       await settle();
-      const r = await tapFirstFrame(s, 0.5);
-      worst = Math.max(worst, Math.abs(r.after - r.before));
+      for (let i = 0; i < 200; i += 1) {
+        const before = s.readPct();
+        const e = s.bundle.flushFrames(1, 16);
+        for (let k = 0; k < 6; k += 1) await Promise.resolve();
+        if (e === 0) break;
+        worstStep = Math.max(worstStep, Math.abs(s.readPct() - before));
+      }
+      const expected = ids.indexOf(ids[round]) / (ids.length - 1);
+      near(s.readPct(), expected, `[21] 第 ${round + 1} 轮：官方改到 ${ids[round]} → 滑到 ${expected.toFixed(3)}`, 2e-2);
+      const r = await tapFirstFrame(s, expected);
+      worstStep = Math.max(worstStep, Math.abs(r.after - r.before));
       s.track().fire("onPointerUp", {});
       await pump21(s, 200);
       await settle();
     }
-    ok(worst < 0.05, `[21] 连续 4 轮"官方改档 → 滑块操作"最大跳变 ${(worst * 100).toFixed(2)}% < 5%`);
+    ok(worstStep < 0.12,
+      `[21] 连续 4 轮"官方改档 → 滑块操作"最大单帧跳变 ${(worstStep * 100).toFixed(2)}% < 12%（旧实现 50%~66%）`);
   }
 
   // ④ ⚠️ 反向保护：修法不能破坏写回（曾把对齐放进 ensureMotion 导致写回变 0 次）
@@ -1710,6 +1759,90 @@ section("52. 三组动画参数都必须稳定（不许 bang-bang 自激振荡�
   // ③ 把发病参数写进测试：它必须被判据拦住（说明判据真的能防住这个 bug）
   const BAD = { K: 120, A: 600, k: 200, amax: 1200, vmax: 20 };
   ok(BAD.amax / 60 > 0.5 * BAD.vmax, "[52] 1.1.2 的旧简洁参数不满足稳定判据（正是 issue #12 的根因）");
+}
+
+section("53. 拖动期不重渲染（125Hz 指针不再变成 125 次/秒的整树渲染）");
+{
+  // 用户报的"卡顿感"的第二层：位置跟手之后，每次 pointermove 仍然 setDraft →
+  // 整条滑条重渲染（四层几何 + 22 个星星节点 + 粒子/刻度数组 + 官方行样式）。
+  // 125Hz 鼠标 = 125 次/秒，全落在 16.7ms 的预算里。
+  // 修法：拖动期位置**直接写 DOM**，只有档位真的变了才惊动 React。
+  // 这条断言就是那次的守门员：实测旧实现 79 次 / 新实现 3 次（120 次 pointermove）。
+  const c = await setup();
+  const I = c.internals;
+  const W = 300;
+  const pctOf = (css) => { const m = /\+ ([\d.]+) \*/.exec(String(css)); return m === null ? null : Number(m[1]); };
+  const readPct = () => pctOf(c.react.find("knob").style.left);
+  const at = (pct) => I.KNOB_RADIUS + pct * (W - 2 * I.KNOB_RADIUS);
+
+  track(c.react).fire("onPointerDown", { clientX: at(0.1), pointerId: 1 });
+  for (let m = 0; m < 6; m += 1) await Promise.resolve();
+
+  const before = c.react.renderCount;
+  let maxLag = 0;
+  const MOVES = 120;
+  for (let i = 0; i < MOVES; i += 1) {
+    const x = at(0.1) + (i + 1) * 1.8;      // 10% → 约 82%，全程匀速
+    track(c.react).fire("onPointerMove", { clientX: x, buttons: 1 });
+    await Promise.resolve();
+    const want = I.clamp01((x - I.KNOB_RADIUS) / (W - 2 * I.KNOB_RADIUS));
+    maxLag = Math.max(maxLag, Math.abs(readPct() - want));
+  }
+  const renders = c.react.renderCount - before;
+  ok(renders === 0,
+    `[53] 拖动 ${MOVES} 次（跨 2 条档位线）一次都不重渲染（实测 ${renders}；旧实现 79 次）`);
+  ok(maxLag < 1e-3,
+    `[53] 而且位置仍然 1:1 跟手（最大偏差 ${(maxLag * 100).toFixed(3)}% < 0.1%）`);
+  // 跨档那一刻的连带 DOM（aria / 星空 / 数值色 / 刻度）必须是**命令式**更新的 ——
+  // 用户上报的"经过每个挡位会顿一下"就是那一次渲染造成的，所以这里既不许渲染，
+  // 也不许因此留下旧值。
+  const ariaNow = c.react.find("track").getAttribute("aria-valuetext");
+  eq(ariaNow, "Max", "[53] 拖到 82% 时读数已经是最高档（命令式写 aria，无需渲染）");
+  ok(visibleStarCount(c.react) > 0, "[53] 星空层也跟着命令式更新（不再是 0 颗）");
+  eq(c.react.find("root").getAttribute("data-energy"), "1", "[53] 能量层已开启（命令式）");
+  ok(Number(c.react.find("root").style["--ces-energy"]) > 0.5, "[53] 能量强度跟着位置走");
+
+  track(c.react).fire("onPointerUp", {});
+  await settle();
+  ok(c.host.selects.length >= 1, "[53] 松手照旧写回一次（省渲染不能省提交）");
+  ok(c.react.renderCount - before >= 1, "[53] 松手那次才渲染（刻度/星空收尾对齐）");
+}
+
+/* ══════════════════════════════════════════════════════════════════════ */
+
+section("54. 落档瞬间官方档位文字就跟上（不再等一次远程往返）");
+{
+  // 用户（第四轮）："动画切换过后，实际挡位（文字）要停一会才切换"。
+  // 原因：那一行的文字是**宿主**渲染的，`RemoteDirectory.select()` 没有乐观 store，
+  //       真值要等 `sessions.selectModel` 往返 + syncInputs 回来。
+  // 修法：落档那一刻乐观写一次文字（holdHostText），并用 MutationObserver 把宿主
+  //       写回的旧值在**同一绘制帧内**改回（观察器回调跑在微任务，早于绘制）。
+  const c = await setup();
+  const I = c.internals;
+  const W = 300;
+  const at = (pct) => I.KNOB_RADIUS + pct * (W - 2 * I.KNOB_RADIUS);
+  const valueSpan = () => c.menu.effortRow.children.filter((child) => child.tagName === "SPAN")[1];
+
+  eq(valueSpan().textContent, "High", "[54] 起始文字是宿主自己渲染的 High");
+  track(c.react).fire("onPointerDown", { clientX: at(0.02), pointerId: 1 }); // 2% → 最低档
+  track(c.react).fire("onPointerUp", {});
+  await settle();
+  eq(valueSpan().textContent, "Off", "[54] 落档瞬间文字就换成 Off（不等宿主往返）");
+
+  // 宿主在 select 回来之前会按**旧**状态重渲染，把文字写回旧值 —— 必须同帧改回，
+  // 否则用户就会看到「Off → High → Off」的闪动。
+  valueSpan().textContent = "High";
+  c.bundle.flushObservers();
+  eq(valueSpan().textContent, "Off", "[54] 宿主写回旧值时被同帧改回（看不到闪动）");
+
+  // 再拖回去也一样（乐观写入不是一次性的）
+  track(c.react).fire("onPointerDown", { clientX: at(0.98), pointerId: 1 });
+  track(c.react).fire("onPointerUp", {});
+  await settle();
+  eq(valueSpan().textContent, "Max", "[54] 反向也立刻跟上（Max）");
+  valueSpan().textContent = "Off";
+  c.bundle.flushObservers();
+  eq(valueSpan().textContent, "Max", "[54] 反向的旧值写回同样被按回去");
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */

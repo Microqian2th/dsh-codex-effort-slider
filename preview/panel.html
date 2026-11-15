@@ -34,16 +34,19 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;gap:18px;padding:
 .ces-inline{--ces-accent:var(--dsw-alias-state-business-primary,var(--dsw-static-blue-450,#4d93f8));box-sizing:border-box;flex-basis:100%;width:100%;min-width:0}
 .ces-track{position:relative;box-sizing:border-box;height:28px;margin-top:2px;border-radius:999px;background:var(--dsw-alias-border-l1,rgba(15,17,21,.08));cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
 .ces-track:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--ces-accent));outline-offset:2px}
+.ces-track::after{content:'';position:absolute;left:0;right:0;top:-6px;bottom:-6px}
 .ces-fill{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;pointer-events:none}
 .ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(128,128,128,.30);background:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 26%,transparent);pointer-events:none}
 .ces-tick[data-on='1']{background:rgba(255,255,255,.5)}
 .ces-knob{position:absolute;top:50%;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 .5px rgba(0,0,0,.06);pointer-events:none}
+.ces-inline[data-dragging='1'] .ces-track{cursor:grabbing}
+.ces-inline[data-dragging='1'] .ces-knob{box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 2px var(--ces-accent)}
 .ces-error{margin-top:6px;font-size:11px;line-height:16px;color:var(--dsw-alias-state-error-primary,#e5484d)}
-.ces-inline[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,.5)}
+.ces-inline[data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(168,85,247,calc(var(--ces-energy,0) * 0.5))}
 .ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}
-.ces-energy{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity .2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}
-.ces-stars{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;transition:opacity .2s ease}
-.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}
+.ces-energy{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);will-change:opacity;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}
+.ces-stars{position:absolute;top:0;bottom:0;left:0;border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;contain:paint;will-change:opacity}
+.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;contain:layout style;will-change:transform;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}
 .ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#fff;box-shadow:0 0 4px rgba(255,255,255,.85);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}
 @keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}
 .ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,.30) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite}
@@ -151,7 +154,9 @@ function energyFor(pct) {
     }
 
 function speedFor(pct) {
-      return Math.min(2, Math.max(0.35, 3 * clamp01(pct) - 1));
+      // ⚠️ 2026-11-11：下限从 0.35 提到 0.55 ✓ —— 左侧不再"慢得像停住"，最高仍 2× ✓。
+      //    （用户反馈"速度偏慢"✓：0.35 时 2s 基准会被拉到 ~5.7s ✗）
+      return Math.min(2, Math.max(0.55, 3 * clamp01(pct) - 1));
     }
 
 function particleCountFor(pct) {
@@ -171,9 +176,9 @@ function starBrightnessFor(index) {
     }
 
 function starDurationFor(index, speedFactor) {
-      var speed = Math.min(MAX_SPEED_FACTOR, Math.max(0.35, typeof speedFactor === "number" ? speedFactor : MAX_SPEED_FACTOR));
+      // 各星之间只差 ±8%（错峰，避免整齐划一地一起跑 ✓）
       var spread = 1 - STARFIELD_DURATION_SPREAD + 2 * STARFIELD_DURATION_SPREAD * starHash01(index, 29);
-      return STARFIELD_DURATION_MEAN * MAX_SPEED_FACTOR / speed * spread;
+      return STARFIELD_DURATION_FIXED * spread;
     }
 
 function starDelayFor(index, duration) {
@@ -420,6 +425,7 @@ var POINTER_SPEED_TAU = 0.03;
 var MAX_FRAME_DT = 0.05;
 var BASE_SPEEDUP = 4;
 var STARFIELD_DURATION_MEAN = 1.5;
+var STARFIELD_DURATION_FIXED = 2;
 var STARFIELD_DURATION_SPREAD = 0.08;
 var STARFIELD_MIN = 0.5;
 var GOLDEN_RATIO = 0.6180339887498949;

@@ -311,31 +311,31 @@ section("4. 关闭菜单 → 官方那一行逐个还原");
   ok(react2.portalHosts.length === 0, "[4] portal 已清空");
 }
 
-section("5. 拖动**跨档即写回**（拖到哪档就变成哪一档），松手再确认一次");
+section("5. 拖动期间**零写回**（不触发整树重渲染），档位文字本地实时，松手才提交一次");
 {
   const { menu, react, host } = await setup();
   track(react).fire("onPointerDown", { clientX: 60, pointerId: 1 }); // 60/300 = 20% → index 1 = low
   await wait(180);
-  // ⚠️ 契约：拖动期**只在跨过档位边界的那一刻**写回一次（不是原来的每 120ms 一次）。
-  //    用户要的是"拖到哪档就变成哪一档"（官方那一行的档位文字随手走）；
-  //    但每秒 8 次写回会让「已生效档位」在拖动中不停变化 → 与滞后的引擎位置不同步 → 抽搐。
-  eq(host.selects.length, 1, "[5] 拖动跨到新档位即写回一次（跨档触发，不是每 120ms 一次）");
-  eq(host.selects[0].reasoningEffort, "low", "[5] 写回的就是指针所在那一档（low）");
+  // ⚠️ 契约（2026-11-17 修订）：
+  //   每次跨档 `directory.select()` 都会更新**全局 store** → **整个 DSH UI 重渲染**
+  //   （用户实测：连"启用智能体团队协作"开关都在闪，形容"像刷新桌面"）。
+  //   所以拖动期**一次都不写回**，档位文字改成**命令式改官方那个值元素**（不经过 store）。
+  eq(host.selects.length, 0, "[5] 拖动跨档【不写回】宿主（避免全局 store 更新 → 整树重渲染/闪烁）");
+  const officialSpans = menu.effortRow.children.filter((child) => child.tagName === "SPAN");
+  eq(officialSpans.length, 2, "[5] 官方两个 span 仍然只有两个");
+  eq(officialSpans[0].textContent, "推理等级", "[5] 官方 label 文字没被改写");
+  eq(officialSpans[1].textContent, "Low", "[5] 官方值文字被【本地命令式】改成 Low（不写 store）");
+  eq(menu.seatEffortEl.textContent, "Low", "[5] 「收起态」那行（模型席上的档位）也实时变 Low ✓（命令式，不写 store）");
 
   track(react).fire("onPointerUp", {});
   await settle();
-  eq(host.selects.length, 1, "[5] 松手时同档位去重，不重复写");
+  eq(host.selects.length, 1, "[5] 松手时才写回一次");
   eq(JSON.stringify(host.selects[0]), JSON.stringify({
     provider: "deepseek",
     model: "deepseek-v41-flash",
     reasoningEffort: "low",
   }), "[5] 写回的是官方 select 契约 { provider, model, reasoningEffort }");
   eq(react.find("track").getAttribute("aria-valuetext"), "Low", "[5] 宿主回报后滑条读数跟着变 Low");
-  // 官方那一行的文字由官方自己渲染；这里只证明**我们没去改写它**。
-  const officialSpans = menu.effortRow.children.filter((child) => child.tagName === "SPAN");
-  eq(officialSpans.length, 2, "[5] 官方两个 span 仍然只有两个");
-  eq(officialSpans[0].textContent, "推理等级", "[5] 官方 label 文字没被改写");
-  eq(officialSpans[1].textContent, "High", "[5] 官方 value 文字也没被改写（我们只加自己的容器）");
 
   track(react).fire("onPointerDown", { clientX: 290, pointerId: 1 }); // 96.7% → max
   track(react).fire("onPointerUp", {});
@@ -677,7 +677,8 @@ section("10b. 系统「减少动态效果」下是放缓，不是冻住");
   const normalDur = parseFloat(star.style.animationDuration);
   const reducedDur = parseFloat(reduced.react.findAll("star")[0].style.animationDuration);
   near(reducedDur / normalDur, 1, "[10b] 默认「完整动画」→ 星星周期与正常模式一致（不放缓）", 0.01);
-  ok(reduced.internals.REDUCED_MOTION_SLOWDOWN > 1, "[10b] 「快速动画」档所用的放缓系数仍在（>1）");
+  // （2026-11-16）删掉原断言「REDUCED_MOTION_SLOWDOWN > 1」✗ —— 该常量已随"简洁档不再放缓粒子"一起删除 ✓；
+  ok(!('REDUCED_MOTION_SLOWDOWN' in reduced.internals), "[10b] 死常量已删除（简洁档不再放缓粒子 ✓）");
 
   const css = reduced.internals.CSS;
   ok(css.indexOf(".ces-energy__sweep{display:none}") > 0, "[10b] reduced-motion 收起扫光（最闪的那部分）");
@@ -778,7 +779,9 @@ section("14. 官方数值文字（Max / High）的颜色");
   // 拖到最高档 → 文字变成紫罗兰
   await pressAndSettle(ctx14, 300);
   eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[14] 拖到 Max：文字直接变紫罗兰");
-  eq(menu.effortValueEl.textContent, "High", "[14] 文字内容仍然由官方自己管（没被我们改写）");
+  // ⚠️ 2026-11-17 契约变了：拖动中**命令式**改官方值文字（为了不写 store、不触发整树重渲染）；
+  //    松手提交后由官方自己接回真值 ✓。所以这里断言的是"本地写入生效了" ✓。
+  eq(menu.effortValueEl.textContent, "Max", "[14] 拖动中文字被【本地命令式】改成 Max（不写 store ✓，松手后官方接回）");
 
   // 关掉菜单 → 还原成原来的内联颜色（通常是空）
   const { menu: menu3, bundle } = await setup();
@@ -816,10 +819,12 @@ section("15. 收起态模型席按钮上的档位（点开之前就看得见）"
   // 拖动中：官方席显示的是**已生效**档位，所以它的颜色不该跟着草稿跑
   await pressAndSettle(ctx15, 300);
   eq(menu.effortValueEl.style.color, "rgb(139,92,246)", "[15] 菜单里那一行跟着草稿变成 Max 色");
-  eq(menu.seatEffortEl.style.color, internals.valueColorFor(H), "[15] 席按钮仍按已生效档位着色（拖动中不乱跳）");
+  eq(menu.seatEffortEl.style.color, internals.valueColorFor(1), "[15] 席按钮颜色跟随拖动（2026-11-17 用户「一起跟吧」✓）");
   await releaseAndSettle(ctx15);
   eq(menu.seatEffortEl.style.color, "rgb(139,92,246)", "[15] 提交后席按钮跟上 Max 色");
-  eq(menu.seatEffortEl.textContent, "High", "[15] 文字仍然由官方自己管（我们只改颜色）");
+  // （2026-11-17）契约改了：席上的**文字**跟着拖动实时变 ✓（命令式写入、不写 store ✓）；
+  // **颜色**仍按已生效档位 ✓（避免颜色乱跳 ✓）。
+  eq(menu.seatEffortEl.textContent, "Max", "[15] 席上文字跟着拖动实时变 Max（命令式 ✓，颜色仍按已生效档位）");
 
   // 官方重渲染换了那个节点 → 桥要重新抓到并补色
   const oldEl = menu.seatEffortEl;
@@ -876,7 +881,7 @@ section("16. Off 档保持官方灰 + 刻度点更小更淡");
   // 拖到 Max 就恢复着色（确认"灰"只发生在 off 档）
   await pressAndSettle(off, 300);
   eq(off.menu.effortValueEl.style.color, "rgb(139,92,246)", "[16] 拖到 Max：菜单里那一行先变紫罗兰");
-  eq(off.menu.seatEffortEl.style.color, "", "[16] 席按钮按已生效档位（仍是 off）→ 还是灰的");
+  eq(off.menu.seatEffortEl.style.color, "rgb(139,92,246)", "[16] 席按钮颜色跟随拖动 → 变紫罗兰（不再等提交 ✓）");
   await releaseAndSettle(off);
   eq(off.menu.seatEffortEl.style.color, "rgb(139,92,246)", "[16] 提交后席按钮也变成紫罗兰");
 
@@ -1181,8 +1186,8 @@ section("19. 两种动画模式：简洁 / 完整，且都不受系统「减少�
   const I = ctx.internals;
 
   // ① 设置只剩两项（灵敏度/力度已按要求删除）
-  eq(I.SETTINGS_SCHEMA.length, 2, "[19] 设置只有两项（动画 + 刻度点）");
-  eq(I.SETTINGS_SCHEMA.map((it) => it.key).join(","), "motion,reachedTicks", "[19] 键名正确，力度已删除");
+  eq(I.SETTINGS_SCHEMA.length, 3, "[19] 设置三项（动画 + 刻度点 + 对话栏彩条）");
+  eq(I.SETTINGS_SCHEMA.map((it) => it.key).join(","), "motion,reachedTicks,composerBar", "[19] 键名正确（力度已删除；新增 composerBar）");
   eq(I.readSettings().motion, "full", "[19] 动画默认 = 完整动画");
   ok(I.SETTINGS_SCHEMA.every((it) => it.default !== undefined), "[19] 每项都显式声明 default");
   eq(I.SETTINGS_SCHEMA[0].options.map((o) => o.label).join("/"), "快速动画/简洁动画/完整动画", "[19] 选项文案与顺序（由上到下：快速 / 简洁 / 完整）");
